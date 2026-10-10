@@ -1,0 +1,10 @@
+# build outputs
+/bin/
+/out/
+/out-*/
+/tests/out/
+/dist/
+*.o
+*.d
+.ninja_deps
+.ninja_log
