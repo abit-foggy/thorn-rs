@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  schedule:
+    # Nightly verification at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [ gcc, clang ]
+    steps:
+      - name: Checkout thorn-rs
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Pin Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build (C99, warnings fatal)
+        run: make CC=${{ matrix.cc }} CFLAGS="-std=c99 -O2 -Wall -Wextra -Wpedantic -Werror"
+
+      - name: Run Verification Suite
+        run: ./tests/verify.sh
