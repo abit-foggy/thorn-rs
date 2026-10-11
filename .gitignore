@@ -4,6 +4,7 @@
 /out-*/
 /tests/out/
 /dist/
+/.thorn-rs/
 *.o
 *.d
 .ninja_deps

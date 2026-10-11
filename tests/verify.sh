@@ -18,6 +18,8 @@ set -u
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
+PATH="$ROOT/bin:$PATH"
+export PATH
 SCRATCH=$(mktemp -d /tmp/thorn-rs-verify.XXXXXX)
 trap 'rm -rf "$SCRATCH"' EXIT
 
@@ -182,6 +184,36 @@ rm -f "tests/out/bad path.rs"
 bin/thorn-rs emit "$FIXTURE" --rustc /nonexistent/rustc \
     --out "$SCRATCH/t.ninja" 2>/dev/null
 [ $? -eq 1 ] && ok "non-executable --rustc fails planning"
+
+# ------------------------------------------------------------------
+step "verify: C-ABI symbol audit"
+bin/thorn-rs check out/libprobe.a --expect thorn_rs_probe >/dev/null 2>&1 \
+    && ok "check passes on the verified archive"
+bin/thorn-rs check out/libprobe.a --expect thorn_rs_missing 2>/dev/null
+[ $? -eq 1 ] && ok "a missing export fails with exit 1"
+bin/thorn-rs check out/libprobe.a --header tests/fixtures/probe/probe.h \
+    >/dev/null 2>&1 && ok "the header contract verifies"
+printf 'int thorn_rs_typo(void);\n' > tests/out/bad.h
+bin/thorn-rs check out/libprobe.a --header tests/out/bad.h 2>&1 \
+    | grep -q "thorn_rs_typo" \
+    && ok "a header mismatch names the missing symbol"
+
+# ------------------------------------------------------------------
+step "verify: the emitted verification edge"
+bin/thorn-rs emit "$FIXTURE" --header tests/fixtures/probe/probe.h \
+    --out out/build-verify.ninja >/dev/null 2>&1 \
+    && ok "emit --header succeeds"
+grep -q "rust_verify" out/build-verify.ninja \
+    && grep -q -- "--expect thorn_rs_probe" out/build-verify.ninja \
+    && grep -q -- "--header tests/fixtures/probe/probe.h" \
+        out/build-verify.ninja \
+    && ok "the fragment carries the audit command"
+if [ -n "$NINJA_BIN" ]; then
+    rm -rf .thorn-rs
+    "$NINJA_BIN" -f out/build-verify.ninja >/dev/null 2>&1 \
+        && [ -f .thorn-rs/probe.verified ] \
+        && ok "ninja runs the audit and stamps the result"
+fi
 
 # ------------------------------------------------------------------
 printf '\nthorn-rs acceptance: %d passed, %d failed\n' "$PASS" "$FAIL"
