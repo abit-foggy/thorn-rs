@@ -69,15 +69,25 @@ make test       # runs tests/verify.sh
 ## Usage
 
 ```sh
-thorn-rs emit <crate-root.rs> [--name NAME] [--format ninja|make]
-              [--out FILE] [--artifact PATH] [--edition 2015|2018|2021|2024]
-              [--target TRIPLE] [--opt-level 0|1|2|3|s|z]
-              [--panic abort|unwind] [--extern NAME=PATH] [-L DIR] [--cfg SPEC]
-              [--rustflag FLAG] [--rustc BIN] [--header FILE]
-thorn-rs plan  <same flags>          # print the planned rustc command
+thorn-rs [crate-root ...] [flags]     build (default root: src/lib.rs)
+thorn-rs build [-f root ...] [-o dir] [-e ninja|make|both]
+              [--rustc bin] [--header FILE] [crate flags]
+thorn-rs plan  <crate-root.rs>        # print the planned rustc command
 thorn-rs check <archive.a> [--expect SYM]... [--header FILE]
 thorn-rs version | help
 ```
+
+`build` mirrors thorn's CLI conventions: `-o/--out-dir` is the
+destination directory (created if missing, default `.`), `-e/--engine`
+selects `ninja`, `make`, or `both` (default `ninja`), and `--rustc`
+overrides the compiler with thorn's precedence (flag > `RUSTC` env >
+`PATH`). Multiple positional crate roots (or repeated `-f`) produce one
+fragment with namespaced rules per crate and an aggregated `all`
+target; duplicate crate names are refused. Subdirectory fragments
+anchor their paths through `RS_ROOT`, so `make -C out/rs` and
+`ninja -f out/rs/build-rs.ninja` produce bit-for-bit identical
+archives. Like thorn, `build` is strictly a meta-build generator — it
+never invokes ninja or make itself.
 
 - `--out` is the fragment destination; when `--format` is omitted it is
   inferred from the extension (`.ninja` vs `.mk` / `Makefile`).
