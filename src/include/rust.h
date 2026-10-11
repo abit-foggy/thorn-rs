@@ -66,4 +66,10 @@ void diag(const char *fmt, ...);
    Make-style depfiles and are rejected at plan time. */
 int has_whitespace(const char *s);
 
+/* Fragment-path safety: rejects empty strings, control characters,
+   whitespace, and every character that is syntactically active in
+   Ninja or Make fragments ($ % : ; & | < > ( ) # " ' \ ` * ? [ ] ! ~).
+   Emitted paths are plain project-relative names. */
+int path_safe(const char *s);
+
 #endif /* THORN_RS_RUST_H */

@@ -61,6 +61,27 @@ int has_whitespace(const char *s)
     return 0;
 }
 
+int path_safe(const char *s)
+{
+    if (!s || !*s || has_whitespace(s))
+        return 0;
+    for (const char *p = s; *p; p++) {
+        unsigned char ch = (unsigned char)*p;
+        if (ch < 0x20 || ch == 0x7f)
+            return 0;
+        switch (ch) {
+        case '$': case '%': case ':': case ';': case '&':
+        case '|': case '<': case '>': case '(': case ')':
+        case '#': case '"': case '\'': case '\\': case '`':
+        case '*': case '?': case '[': case ']': case '!': case '~':
+            return 0;
+        default:
+            break;
+        }
+    }
+    return 1;
+}
+
 void rust_crate_init(RustCrate *c)
 {
     memset(c, 0, sizeof(*c));
