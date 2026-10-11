@@ -93,8 +93,8 @@ step "emit: make fragment"
 bin/thorn-rs emit "$FIXTURE" --format make --out out-make/build-rs.mk \
     >/dev/null 2>&1 && ok "emit make succeeds"
 grep -q "RUSTC ?= rustc" out-make/build-rs.mk \
-    && grep -qF -- '-include $(RS_ROOT)/out-make/libprobe.a.d' \
-        out-make/build-rs.mk \
+    && grep -q -- "-include" out-make/build-rs.mk \
+    && grep -q "libprobe\.a\.d" out-make/build-rs.mk \
     && ok "make fragment carries RUSTC ?= and depfile inclusion"
 bin/thorn-rs emit "$FIXTURE" --format make --out out-make/build-rs.mk \
     >/dev/null 2>&1

@@ -49,15 +49,13 @@ invocation, and adds it to thorn's graph. The header is your C-ABI
 contract: if the built archive is missing a symbol the header declares,
 the build fails right there.
 
-## Without thorn
+## Without thorn (legacy)
 
-thorn-rs also works alone — it writes a `build-rs.ninja` (or
-`build-rs.mk`) and ninja or make does the rest:
-
-```sh
-thorn-rs build rust/safe/src/lib.rs --out-dir out
-ninja -f out/build-rs.ninja
-```
+thorn-rs also works alone: `thorn-rs build <crate-root>` writes a
+`build-rs.ninja` (or `build-rs.mk` with `--engine make`), and ninja or
+make does the rest. `plan` prints the planned rustc command. This
+predates the plugin and is kept for compatibility — prefer the thorn
+flow above.
 
 ## Checking an archive
 
