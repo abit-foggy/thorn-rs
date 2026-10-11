@@ -23,12 +23,12 @@
 
 #define HEADER_MAX_BYTES (1u << 20)
 
-#define is_ident_start(c) \
+#define hdr_is_ident_start(c) \
     (((c) >= 'a' && (c) <= 'z') || ((c) >= 'A' && (c) <= 'Z') || (c) == '_')
-#define is_ident(c) (is_ident_start(c) || ((c) >= '0' && (c) <= '9'))
+#define hdr_is_ident(c) (hdr_is_ident_start(c) || ((c) >= '0' && (c) <= '9'))
 
 static void
-blank2(char *out, size_t *o)
+blank2v(char *out, size_t *o)
 {
     out[*o] = ' ';
     out[*o + 1] = ' ';
@@ -100,7 +100,7 @@ blank_noncode(const char *src, size_t len, char *out)
 
         if (in_block) {
             if (c == '*' && n == '/') {
-                blank2(out, &o);
+                blank2v(out, &o);
                 in_block = 0;
                 i += 2;
                 continue;
@@ -118,7 +118,7 @@ blank_noncode(const char *src, size_t len, char *out)
         }
         if (in_str || in_chr) {
             if (c == '\\' && i + 1 < len) {
-                blank2(out, &o);
+                blank2v(out, &o);
                 i += 2;
                 continue;
             }
@@ -129,13 +129,13 @@ blank_noncode(const char *src, size_t len, char *out)
             continue;
         }
         if (c == '/' && n == '/') {
-            blank2(out, &o);
+            blank2v(out, &o);
             in_line = 1;
             i += 2;
             continue;
         }
         if (c == '/' && n == '*') {
-            blank2(out, &o);
+            blank2v(out, &o);
             in_block = 1;
             i += 2;
             continue;
@@ -195,7 +195,7 @@ segment_has_keyword(const char *s, const char *pos, const char *kw)
         seg--;
     for (const char *p = seg; p + kn <= pos; p++) {
         if (strncmp(p, kw, kn) == 0 &&
-            (p == seg || !is_ident(p[-1])) && !is_ident(p[kn]))
+            (p == seg || !hdr_is_ident(p[-1])) && !hdr_is_ident(p[kn]))
             return 1;
     }
     return 0;
@@ -241,12 +241,12 @@ collect_header_syms(const char *path, StrList *expected)
     free(src);
 
     for (const char *p = clean; *p;) {
-        if (!is_ident_start(*p)) {
+        if (!hdr_is_ident_start(*p)) {
             p++;
             continue;
         }
         const char *name = p;
-        while (is_ident(*p))
+        while (hdr_is_ident(*p))
             p++;
         size_t nlen = (size_t)(p - name);
         const char *q = p;
@@ -310,6 +310,51 @@ verify_command(const char *archive, const char *header,
             return 1;
     }
     return 0;
+}
+
+int
+verify_expected(const char *header, const StrList *extra, StrList *out)
+{
+    if (header && collect_header_syms(header, out) != 0)
+        return THORN_RS_EXIT_IO;
+    for (size_t i = 0; i < extra->count; i++)
+        strlist_push(out, extra->items[i]);
+    return 0;
+}
+
+/* A `for s in ...` loop over the expected names; no helper binary. */
+int
+verify_edge_command(const char *archive, const char *header,
+                    const StrList *expected, char *buf, size_t n)
+{
+    StrList want = {0};
+    if (verify_expected(header, expected, &want) != 0) {
+        strlist_free(&want);
+        return 1;
+    }
+    if (want.count == 0) {
+        strlist_free(&want);
+        diag("verify edge requested with no expected symbols");
+        return 1;
+    }
+    if (snprintf(buf, n, "for s in") >= (int)n) {
+        strlist_free(&want);
+        return 1;
+    }
+    for (size_t i = 0; i < want.count; i++) {
+        size_t len = strlen(buf);
+        int w = snprintf(buf + len, n - len, " %s", want.items[i]);
+        if (w < 0 || (size_t)w >= n - len) {
+            strlist_free(&want);
+            return 1;
+        }
+    }
+    size_t len = strlen(buf);
+    int w = snprintf(buf + len, n - len,
+                     "; do nm -g --defined-only %s 2>/dev/null"
+                     " | grep -qw \"$s\" || exit 1; done", archive);
+    strlist_free(&want);
+    return (w < 0 || (size_t)w >= n - len) ? 1 : 0;
 }
 
 int

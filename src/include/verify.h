@@ -26,4 +26,15 @@ int verify_archive(const char *archive, const StrList *expected,
 int verify_command(const char *archive, const char *header,
                    const StrList *expected, char *buf, size_t n);
 
+/* The expected C-ABI symbol set: `expected` plus every declaration in
+   `header`.  0 or THORN_RS_EXIT_IO. */
+int verify_expected(const char *header, const StrList *extra,
+                    StrList *out);
+
+/* A binary-free audit edge for build graphs: a POSIX sh loop that
+   fails unless every expected symbol is defined in `archive`.  0 or 1
+   on truncation. */
+int verify_edge_command(const char *archive, const char *header,
+                        const StrList *expected, char *buf, size_t n);
+
 #endif /* THORN_RS_VERIFY_H */
