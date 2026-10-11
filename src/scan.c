@@ -288,6 +288,102 @@ find_attr_value(const char *s, const char *name, char *out, size_t outsz)
     return 0;
 }
 
+static int
+is_ident_start(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+}
+
+static int
+is_ident(char c)
+{
+    return is_ident_start(c) || (c >= '0' && c <= '9');
+}
+
+/* Position just past the `]` of the next `#[name]` (outer attribute)
+   at or after `from`, or NULL. */
+static const char *
+find_attr_end(const char *from, const char *name)
+{
+    size_t nl = strlen(name);
+
+    for (const char *p = strchr(from, '#'); p; p = strchr(p + 1, '#')) {
+        const char *q = p + 1;
+        if (*q != '[')
+            continue;
+        q = skip_ws(q + 1);
+        if (strncmp(q, name, nl) != 0)
+            continue;
+        q = skip_ws(q + nl);
+        if (*q == ']')
+            return q + 1;
+    }
+    return NULL;
+}
+
+/* Collect `#[export_name = "sym"]` values; string contents kept. */
+static void
+collect_export_names(const char *s, StrList *out)
+{
+    for (const char *p = strchr(s, '#'); p; p = strchr(p + 1, '#')) {
+        const char *q = p + 1;
+        if (*q != '!')
+            continue;
+        q++;
+        if (*q != '[')
+            continue;
+        q = skip_ws(q + 1);
+        if (strncmp(q, "export_name", 11) != 0)
+            continue;
+        q = skip_ws(q + 11);
+        if (*q != '=')
+            continue;
+        q = skip_ws(q + 1);
+        if (*q != '"')
+            continue;
+        q++;
+        char sym[256];
+        size_t k = 0;
+        while (*q && *q != '"' && k + 1 < sizeof(sym))
+            sym[k++] = *q++;
+        sym[k] = '\0';
+        if (*q == '"' && sym[0])
+            strlist_push(out, sym);
+    }
+}
+
+/* Collect the function names `#[no_mangle] ... fn <name>` names. */
+static void
+collect_no_mangle_fns(const char *s, StrList *out)
+{
+    const char *p = s;
+
+    for (;;) {
+        p = find_attr_end(p, "no_mangle");
+        if (p == NULL)
+            return;
+        /* the attributed item follows; find its `fn` keyword */
+        const char *limit = p + 256;
+        for (const char *r = p; r < limit && *r && *r != ';'; r++) {
+            if (r[0] == 'f' && r[1] == 'n' &&
+                (r == s || !is_ident(r[-1])) && !is_ident(r[2])) {
+                const char *n = skip_ws(r + 2);
+                char sym[256];
+                size_t k = 0;
+                while (is_ident(n[k]) && k + 1 < sizeof(sym)) {
+                    sym[k] = n[k];
+                    k++;
+                }
+                sym[k] = '\0';
+                if (k)
+                    strlist_push(out, sym);
+                p = n + k;
+                break;
+            }
+        }
+    }
+}
+
 int
 scan_crate(const char *path, RustCrate *out)
 {
@@ -353,6 +449,9 @@ scan_crate(const char *path, RustCrate *out)
                  out->name, attr_name);
         }
     }
+
+    collect_no_mangle_fns(clean, &out->capi_syms);
+    collect_export_names(nocomment, &out->capi_syms);
 
     free(clean);
     free(nocomment);
