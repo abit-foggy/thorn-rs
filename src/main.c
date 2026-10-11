@@ -34,22 +34,32 @@ usage(FILE *out)
         "thorn-rs " THORN_RS_VERSION " - zero-cargo #![no_std] Rust "
         "static libraries for thorn\n\n"
         "USAGE:\n"
-        "    thorn-rs emit <crate-root.rs> [flags]   write a build "
+        "    thorn-rs [crate-root ...] [flags]   build (default root: "
+        "src/lib.rs)\n"
+        "    thorn-rs build [-f root ...] [-o dir] [-e ninja|make|both]\n"
+        "                    [--rustc bin] [--header FILE] [crate "
+        "flags]\n"
+        "    thorn-rs emit <crate-root.rs> [flags]   write a single "
         "fragment\n"
         "    thorn-rs plan <crate-root.rs> [flags]   print the planned "
         "rustc command\n"
+        "    thorn-rs check <archive.a> [--expect SYM] [--header FILE]\n"
         "    thorn-rs version | help\n\n"
-        "FLAGS:\n"
+        "BUILD FLAGS:\n"
+        "    -f, --file ROOT       crate root (repeatable, with "
+        "positionals)\n"
+        "    -o, --out-dir DIR     destination directory (default: .; "
+        "created)\n"
+        "    -e, --engine ENGINE   ninja | make | both (default: ninja)\n"
+        "    --rustc BIN           rustc binary (mirrors thorn's "
+        "--compiler;\n"
+        "                          default: RUSTC env, then PATH)\n"
+        "    --header FILE         C-ABI contract; stamps a "
+        ".thorn-rs/<name>.verified\n"
+        "                          audit into the fragment\n\n"
+        "CRATE FLAGS (apply to every crate):\n"
         "    --name NAME           crate name (default: "
         "#![crate_name] attribute)\n"
-        "    --format ninja|make   fragment format (default: infer "
-        "from --out)\n"
-        "    --out FILE            fragment destination\n"
-        "                          (default: build-rs.ninja / "
-        "build-rs.mk)\n"
-        "    --artifact PATH       archive path\n"
-        "                          (default: <fragment dir>/lib<name>"
-        ".a)\n"
         "    --edition EDITION     2015 | 2018 | 2021 | 2024 "
         "(default: 2021)\n"
         "    --target TRIPLE       rustc --target (default: host)\n"
@@ -59,13 +69,12 @@ usage(FILE *out)
         "    --extern NAME=PATH    repeatable\n"
         "    -L DIR                repeatable dependency search path\n"
         "    --cfg SPEC            repeatable, e.g. 'feature=\"std\"'\n"
-        "    --rustflag FLAG       repeatable extra rustc pass\n"
-        "    --rustc BIN           rustc binary (default: RUSTC env, "
-        "then PATH)\n"
-        "    --header FILE         C-ABI contract; emit stamps a "
-        "verify edge,\n"
-        "                          check audits the archive against it\n\n"
-        "    thorn-rs check <archive.a> [--expect SYM] [--header FILE]\n\n"
+        "    --rustflag FLAG       repeatable extra rustc pass\n\n"
+        "EMIT FLAGS (low-level single-fragment plumbing):\n"
+        "    --format ninja|make   fragment format (default: infer "
+        "from --out)\n"
+        "    --out FILE            fragment destination\n"
+        "    --artifact PATH       archive path override\n\n"
         "EXIT CODES: 0 ok; 1 scan/plan failure; 2 file I/O; 64 usage\n");
 }
 
@@ -142,28 +151,58 @@ ensure_parent_dir(const char *path)
     return 0;
 }
 
+/* The relative path from a fragment sitting in `dir` back to the
+   emission working directory: "out/rs" -> "../..", "." -> "". */
+static const char *
+compute_ups(const char *dir, char *buf, size_t n)
+{
+    char tmp[1024];
+
+    snprintf(tmp, sizeof(tmp), "%s", dir);
+    size_t l = strlen(tmp);
+    while (l > 1 && tmp[l - 1] == '/')
+        tmp[--l] = '\0';
+    if (tmp[0] == '\0' || strcmp(tmp, ".") == 0 || tmp[0] == '/') {
+        buf[0] = '\0';
+        return buf;
+    }
+    const char *p = tmp;
+    while (p[0] == '.' && p[1] == '/')
+        p += 2;
+    size_t depth = 1;
+    for (const char *q = p; *q; q++)
+        if (*q == '/')
+            depth++;
+    buf[0] = '\0';
+    for (size_t i = 0; i < depth; i++) {
+        if (strlen(buf) + 3 >= n)
+            break;
+        strcat(buf, "../");
+    }
+    return buf;
+}
+
 static int
-set_opt_level(RustCrate *c, const char *v)
+set_edition(char *dst, size_t n, const char *v)
+{
+    if (strcmp(v, "2015") && strcmp(v, "2018") &&
+        strcmp(v, "2021") && strcmp(v, "2024"))
+        return -1;
+    snprintf(dst, n, "%s", v);
+    return 0;
+}
+
+static int
+parse_opt_level(const char *v)
 {
     if (strlen(v) != 1)
         return -1;
     switch (v[0]) {
     case '0': case '1': case '2': case '3': case 's': case 'z':
-        c->opt_level = (int)v[0];
-        return 0;
+        return (int)v[0];
     default:
         return -1;
     }
-}
-
-static int
-set_edition(RustCrate *c, const char *v)
-{
-    if (strcmp(v, "2015") && strcmp(v, "2018") &&
-        strcmp(v, "2021") && strcmp(v, "2024"))
-        return -1;
-    snprintf(c->edition, sizeof(c->edition), "%s", v);
-    return 0;
 }
 
 static int
@@ -209,7 +248,7 @@ parse_args(int argc, char **argv, RustCrate *c, int *format,
         } else if (strcmp(a, "--edition") == 0) {
             if (v == NULL)
                 return bad_flag_ret(a);
-            if (set_edition(c, v) != 0) {
+            if (set_edition(c->edition, sizeof(c->edition), v) != 0) {
                 diag("unknown --edition '%s' (expected 2015, 2018, "
                      "2021, or 2024)", v);
                 return THORN_RS_EXIT_USAGE;
@@ -223,11 +262,13 @@ parse_args(int argc, char **argv, RustCrate *c, int *format,
         } else if (strcmp(a, "--opt-level") == 0) {
             if (v == NULL)
                 return bad_flag_ret(a);
-            if (set_opt_level(c, v) != 0) {
+            int lv = parse_opt_level(v);
+            if (lv < 0) {
                 diag("unknown --opt-level '%s' (expected 0-3, s, or z)",
                      v);
                 return THORN_RS_EXIT_USAGE;
             }
+            c->opt_level = lv;
             consumes = 1;
         } else if (strcmp(a, "--panic") == 0) {
             if (v == NULL)
@@ -355,6 +396,363 @@ cmd_check(int argc, char **argv)
     return rc;
 }
 
+/* thorn-rs build [-f root ...] [-o dir] [-e engine] [flags] [root ...]
+ *
+ * The thorn-parity front-end: scans one or more crate roots, plans
+ * deterministic rustc invocations, and writes backend fragments into
+ * --out-dir.  Pure meta-build generation; no backend is invoked. */
+struct SharedFlags {
+    char edition[16];
+    char target[128];
+    int opt_level;
+    int panic_abort;
+    char header[1024];
+    StrList cfgs;
+    StrList rustflags;
+    StrList externs;
+    StrList search_paths;
+};
+
+static int
+cmd_build(int argc, char **argv)
+{
+    StrList roots = {0};
+    struct SharedFlags sf;
+    char out_dir[1024];
+    char rustc_flag[1024];
+    int engine = FMT_NINJA;
+    int rustc_given = 0;
+    int rc = 0;
+
+    memset(&sf, 0, sizeof(sf));
+    snprintf(sf.edition, sizeof(sf.edition), "2021");
+    sf.opt_level = RUST_OPT_UNSET;
+    sf.panic_abort = -1;
+    out_dir[0] = '\0';
+    rustc_flag[0] = '\0';
+
+    for (int i = 0; i < argc; i++) {
+        const char *a = argv[i];
+        const char *v = (i + 1 < argc) ? argv[i + 1] : NULL;
+        int consumes = 0;
+
+        if (strcmp(a, "-f") == 0 || strcmp(a, "--file") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            strlist_push(&roots, v);
+            consumes = 1;
+        } else if (strcmp(a, "-o") == 0 || strcmp(a, "--out-dir") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            snprintf(out_dir, sizeof(out_dir), "%s", v);
+            consumes = 1;
+        } else if (strcmp(a, "-e") == 0 || strcmp(a, "--engine") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            if (strcmp(v, "ninja") == 0)
+                engine = FMT_NINJA;
+            else if (strcmp(v, "make") == 0)
+                engine = FMT_MAKE;
+            else if (strcmp(v, "both") == 0)
+                engine = FMT_NINJA | FMT_MAKE;
+            else {
+                diag("unknown --engine '%s' (expected ninja, make, or "
+                     "both)", v);
+                rc = THORN_RS_EXIT_USAGE;
+                goto out;
+            }
+            consumes = 1;
+        } else if (strcmp(a, "--rustc") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            snprintf(rustc_flag, sizeof(rustc_flag), "%s", v);
+            rustc_given = 1;
+            consumes = 1;
+        } else if (strcmp(a, "--header") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            snprintf(sf.header, sizeof(sf.header), "%s", v);
+            consumes = 1;
+        } else if (strcmp(a, "--edition") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            if (set_edition(sf.edition, sizeof(sf.edition), v) != 0) {
+                diag("unknown --edition '%s'", v);
+                rc = THORN_RS_EXIT_USAGE;
+                goto out;
+            }
+            consumes = 1;
+        } else if (strcmp(a, "--target") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            snprintf(sf.target, sizeof(sf.target), "%s", v);
+            consumes = 1;
+        } else if (strcmp(a, "--opt-level") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            int lv = parse_opt_level(v);
+            if (lv < 0) {
+                diag("unknown --opt-level '%s'", v);
+                rc = THORN_RS_EXIT_USAGE;
+                goto out;
+            }
+            sf.opt_level = lv;
+            consumes = 1;
+        } else if (strcmp(a, "--panic") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            if (strcmp(v, "abort") == 0)
+                sf.panic_abort = 1;
+            else if (strcmp(v, "unwind") == 0)
+                sf.panic_abort = 0;
+            else {
+                diag("unknown --panic '%s'", v);
+                rc = THORN_RS_EXIT_USAGE;
+                goto out;
+            }
+            consumes = 1;
+        } else if (strcmp(a, "--extern") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            strlist_push(&sf.externs, v);
+            consumes = 1;
+        } else if (strcmp(a, "-L") == 0 ||
+                   strcmp(a, "--search-path") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            strlist_push(&sf.search_paths, v);
+            consumes = 1;
+        } else if (strcmp(a, "--cfg") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            strlist_push(&sf.cfgs, v);
+            consumes = 1;
+        } else if (strcmp(a, "--rustflag") == 0) {
+            if (v == NULL) {
+                rc = bad_flag_ret(a);
+                goto out;
+            }
+            strlist_push(&sf.rustflags, v);
+            consumes = 1;
+        } else if (strcmp(a, "--help") == 0 || strcmp(a, "-h") == 0) {
+            usage(stdout);
+            goto out;
+        } else if (a[0] == '-' && a[1] != '\0') {
+            diag("unknown flag '%s'", a);
+            rc = THORN_RS_EXIT_USAGE;
+            goto out;
+        } else {
+            strlist_push(&roots, a);
+        }
+        i += consumes;
+    }
+
+    if (roots.count == 0)
+        strlist_push(&roots, "src/lib.rs");
+    if (out_dir[0] == '\0')
+        snprintf(out_dir, sizeof(out_dir), ".");
+
+    RustCrate *crates = calloc(roots.count, sizeof(RustCrate));
+    const RustCrate **ptrs = calloc(roots.count, sizeof(*ptrs));
+    if (crates == NULL || ptrs == NULL) {
+        diag("out of memory");
+        free(crates);
+        free(ptrs);
+        rc = THORN_RS_EXIT_IO;
+        goto out;
+    }
+
+    for (size_t i = 0; i < roots.count; i++) {
+        RustCrate *c = &crates[i];
+        ptrs[i] = c;
+        rust_crate_init(c);
+        snprintf(c->edition, sizeof(c->edition), "%s", sf.edition);
+        snprintf(c->target, sizeof(c->target), "%s", sf.target);
+        c->opt_level = sf.opt_level;
+        c->panic_abort = sf.panic_abort;
+        snprintf(c->header, sizeof(c->header), "%s", sf.header);
+        for (size_t k = 0; k < sf.cfgs.count; k++)
+            strlist_push(&c->cfgs, sf.cfgs.items[k]);
+        for (size_t k = 0; k < sf.rustflags.count; k++)
+            strlist_push(&c->rustflags, sf.rustflags.items[k]);
+        for (size_t k = 0; k < sf.externs.count; k++)
+            strlist_push(&c->externs, sf.externs.items[k]);
+        for (size_t k = 0; k < sf.search_paths.count; k++)
+            strlist_push(&c->search_paths, sf.search_paths.items[k]);
+
+        rc = scan_crate(roots.items[i], c);
+        if (rc != SCAN_OK) {
+            rc = rc == SCAN_IO ? THORN_RS_EXIT_IO : THORN_RS_EXIT_SCAN;
+            goto out_free;
+        }
+        if (c->header[0] && !path_safe(c->header)) {
+            diag("header path is unsafe in build fragments: '%s'",
+                 c->header);
+            rc = THORN_RS_EXIT_SCAN;
+            goto out_free;
+        }
+        int w = (strcmp(out_dir, ".") == 0)
+                    ? snprintf(c->out, sizeof(c->out), "lib%s.a", c->name)
+                    : snprintf(c->out, sizeof(c->out), "%s/lib%s.a",
+                               out_dir, c->name);
+        if (w < 0 || (size_t)w >= sizeof(c->out)) {
+            diag("artifact path for crate '%s' exceeds the path limit",
+                 c->name);
+            rc = THORN_RS_EXIT_SCAN;
+            goto out_free;
+        }
+        if (!path_safe(c->out)) {
+            diag("artifact path is unsafe in build fragments: '%s'",
+                 c->out);
+            rc = THORN_RS_EXIT_SCAN;
+            goto out_free;
+        }
+        for (size_t k = 0; k < i; k++) {
+            if (strcmp(crates[k].name, c->name) == 0) {
+                diag("duplicate crate name '%s' (one archive per name; "
+                     "see docs/SCOPING.md section 5.1)", c->name);
+                rc = THORN_RS_EXIT_SCAN;
+                goto out_free;
+            }
+        }
+    }
+
+    char tool[1024], resolved[4096];
+    rc = plan_locate_rustc(rustc_given ? rustc_flag : NULL, tool,
+                           sizeof(tool), resolved, sizeof(resolved));
+    if (rc != 0)
+        goto out_free;
+    plan_probe_version(resolved);
+
+    char ups[1024];
+    compute_ups(out_dir, ups, sizeof(ups));
+    int ninja_wanted = (engine & FMT_NINJA) != 0;
+    int make_wanted = (engine & FMT_MAKE) != 0;
+
+    if (ninja_wanted) {
+        char frag[1200];
+        int w = (strcmp(out_dir, ".") == 0)
+                    ? snprintf(frag, sizeof(frag), "build-rs.ninja")
+                    : snprintf(frag, sizeof(frag), "%s/build-rs.ninja",
+                               out_dir);
+        if (w < 0 || (size_t)w >= sizeof(frag)) {
+            diag("fragment path exceeds the path limit");
+            rc = THORN_RS_EXIT_SCAN;
+            goto out_free;
+        }
+        for (size_t i = 0; i < roots.count; i++) {
+            int fw = snprintf(crates[i].frag, sizeof(crates[i].frag),
+                              "%s", frag);
+            if (fw < 0 || (size_t)fw >= sizeof(crates[i].frag)) {
+                diag("fragment path exceeds the crate path limit");
+                rc = THORN_RS_EXIT_SCAN;
+                goto out_free;
+            }
+        }
+        if (ensure_parent_dir(frag) != 0) {
+            rc = THORN_RS_EXIT_IO;
+            goto out_free;
+        }
+        FILE *fp = fopen(frag, "w");
+        if (fp == NULL) {
+            diag("cannot write fragment '%s'", frag);
+            rc = THORN_RS_EXIT_IO;
+            goto out_free;
+        }
+        int erc = emit_ninja_set(ptrs, roots.count, tool, fp);
+        if (fclose(fp) != 0) {
+            diag("write error on fragment '%s'", frag);
+            erc = THORN_RS_EXIT_IO;
+        }
+        if (erc != 0) {
+            rc = erc;
+            goto out_free;
+        }
+        diag("wrote %s (ninja) for %zu crate%s", frag, roots.count,
+             roots.count == 1 ? "" : "s");
+    }
+
+    if (make_wanted) {
+        char frag[1200];
+        int w = (strcmp(out_dir, ".") == 0)
+                    ? snprintf(frag, sizeof(frag), "build-rs.mk")
+                    : snprintf(frag, sizeof(frag), "%s/Makefile",
+                               out_dir);
+        if (w < 0 || (size_t)w >= sizeof(frag)) {
+            diag("fragment path exceeds the path limit");
+            rc = THORN_RS_EXIT_SCAN;
+            goto out_free;
+        }
+        for (size_t i = 0; i < roots.count; i++) {
+            int fw = snprintf(crates[i].frag, sizeof(crates[i].frag),
+                              "%s", frag);
+            if (fw < 0 || (size_t)fw >= sizeof(crates[i].frag)) {
+                diag("fragment path exceeds the crate path limit");
+                rc = THORN_RS_EXIT_SCAN;
+                goto out_free;
+            }
+        }
+        if (ensure_parent_dir(frag) != 0) {
+            rc = THORN_RS_EXIT_IO;
+            goto out_free;
+        }
+        FILE *fp = fopen(frag, "w");
+        if (fp == NULL) {
+            diag("cannot write fragment '%s'", frag);
+            rc = THORN_RS_EXIT_IO;
+            goto out_free;
+        }
+        int erc = emit_make_set(ptrs, roots.count, tool, ups, fp);
+        if (fclose(fp) != 0) {
+            diag("write error on fragment '%s'", frag);
+            erc = THORN_RS_EXIT_IO;
+        }
+        if (erc != 0) {
+            rc = erc;
+            goto out_free;
+        }
+        diag("wrote %s (make) for %zu crate%s", frag, roots.count,
+             roots.count == 1 ? "" : "s");
+    }
+
+out_free:
+    for (size_t i = 0; i < roots.count; i++)
+        rust_crate_free(&crates[i]);
+    free(crates);
+    free(ptrs);
+out:
+    strlist_free(&roots);
+    strlist_free(&sf.cfgs);
+    strlist_free(&sf.rustflags);
+    strlist_free(&sf.externs);
+    strlist_free(&sf.search_paths);
+    return rc;
+}
+
 static int
 cmd_run(int emit_mode, int argc, char **argv)
 {
@@ -453,9 +851,18 @@ cmd_run(int emit_mode, int argc, char **argv)
         rust_crate_free(&crate);
         return THORN_RS_EXIT_IO;
     }
-    int erc = (format == FMT_NINJA)
-                  ? emit_ninja(&crate, tool, fp)
-                  : emit_make(&crate, tool, fp);
+    int erc;
+    if (format == FMT_NINJA) {
+        const RustCrate *set[1] = { &crate };
+        erc = emit_ninja_set(set, 1, tool, fp);
+    } else {
+        char fdir[1024];
+        char ups[1024];
+        dir_name(crate.frag, fdir, sizeof(fdir));
+        compute_ups(fdir, ups, sizeof(ups));
+        const RustCrate *set[1] = { &crate };
+        erc = emit_make_set(set, 1, tool, ups, fp);
+    }
     if (fclose(fp) != 0) {
         diag("write error on fragment '%s'", crate.frag);
         erc = THORN_RS_EXIT_IO;
@@ -475,10 +882,8 @@ main(int argc, char **argv)
 {
     plan_scrub_env();
 
-    if (argc < 2) {
-        usage(stderr);
-        return THORN_RS_EXIT_USAGE;
-    }
+    if (argc < 2)
+        return cmd_build(argc - 1, argv + 1);
     const char *cmd = argv[1];
     if (strcmp(cmd, "version") == 0) {
         printf("thorn-rs %s\n", THORN_RS_VERSION);
@@ -489,12 +894,16 @@ main(int argc, char **argv)
         usage(stdout);
         return THORN_RS_EXIT_OK;
     }
+    if (strcmp(cmd, "build") == 0)
+        return cmd_build(argc - 2, argv + 2);
     if (strcmp(cmd, "emit") == 0)
         return cmd_run(1, argc - 2, argv + 2);
     if (strcmp(cmd, "plan") == 0)
         return cmd_run(0, argc - 2, argv + 2);
     if (strcmp(cmd, "check") == 0)
         return cmd_check(argc - 2, argv + 2);
+    if (cmd[0] != '-')
+        return cmd_build(argc - 1, argv + 1);
 
     diag("unknown command '%s'", cmd);
     usage(stderr);
