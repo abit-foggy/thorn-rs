@@ -32,6 +32,33 @@ out/libprobe.a: src/lib.rs
 The resulting `lib<name>.a` is a plain C-ABI static archive — add it to any
 C link line, including thorn-generated `build.ninja` / `Makefile` backends.
 
+## C-ABI verification
+
+The classic no_std failure is a silent ABI mismatch: a forgotten
+`#[no_mangle]`, a typo'd export, a header function nobody implemented.
+`thorn-rs check` audits the archive with subset semantics — every
+expected symbol must exist, extra exports are informational:
+
+```sh
+thorn-rs check out/libprobe.a --header include/probe.h
+```
+
+With `--header`, `emit` also stamps a verification edge into the
+fragment, so the audit runs as part of every backend build:
+
+```ninja
+rule rust_verify
+  command = mkdir -p .thorn-rs && $thorn_rs check $in && touch $out
+  description = VERIFY C-ABI probe
+
+build .thorn-rs/probe.verified: rust_verify out/libprobe.a include/probe.h
+```
+
+The expectations come from two nets: the functions the crate declares
+(`#[no_mangle] pub extern "C" fn`, `#[export_name]`) become `--expect`
+flags, and every declaration in the contract header must be exported
+by the built archive.
+
 ## Build
 
 ```sh
@@ -46,8 +73,9 @@ thorn-rs emit <crate-root.rs> [--name NAME] [--format ninja|make]
               [--out FILE] [--artifact PATH] [--edition 2015|2018|2021|2024]
               [--target TRIPLE] [--opt-level 0|1|2|3|s|z]
               [--panic abort|unwind] [--extern NAME=PATH] [-L DIR] [--cfg SPEC]
-              [--rustflag FLAG] [--rustc BIN]
+              [--rustflag FLAG] [--rustc BIN] [--header FILE]
 thorn-rs plan  <same flags>          # print the planned rustc command
+thorn-rs check <archive.a> [--expect SYM]... [--header FILE]
 thorn-rs version | help
 ```
 
