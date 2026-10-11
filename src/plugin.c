@@ -3,16 +3,12 @@
  *
  * Compiled as one unity unit (rust.c, scan.c, plan.c and verify.c are
  * included below; the Makefile renames their shared helpers to rs_*)
- * so dist/plugin.o carries the whole brain and exports exactly three
- * plain symbols:
- *
- *   thorn_plugin_init(ctx)   registers the rust.* namespace
- *   c_rust_crate(...)        lowers a crate to the active build graph
- *   c_rust_check(...)        audits a built archive
- *
- * The c_<ns>_<fn> naming is the interop contract for thorn's plugin
- * link objects; the engine symbols this unit calls are bound by the
- * host at load time.
+ * so dist/plugin.o carries the whole brain.  The exports use pith's
+ * plugin mangling c_<author>_<module>_<fn> and the bundled manifest
+ * (`module = "rust"` + `fn` lines) is the registration: thorn builds
+ * an import unit from it and the spec calls rust.crate / rust.check.
+ * The engine symbols this unit calls are bound by the host (in-memory)
+ * or thorn's own engine.o link object (temp-executable fallback).
  *
  * Part of thorn-rs, the zero-cargo Rust staticlib companion for thorn.
  * Copyright (c) 2026 abit-foggy
@@ -26,7 +22,6 @@
 #include <string.h>
 
 #include <pith.h>
-#include <pith_embed.h>
 
 #include "include/rust.h"
 #include "include/scan.h"
@@ -43,9 +38,14 @@ extern int c_engine_add_command(PithValue *output, PithValue *command,
  * lowers two graph edges: the build edge producing <out-dir>/lib<name>.a
  * and, with a header contract, the C-ABI audit edge stamping
  * .thorn-rs/<name>.verified.  Returns 1 on success; 0 fails the spec
- * (the engine epilogue then aborts the run). */
+ * (the engine epilogue then aborts the run).
+ *
+ * The export name is the pith plugin mangling c_<author>_<module>_<fn>
+ * for author "abit-foggy", module "rust"; the manifest's fn table is
+ * what makes the spec-facing name rust.crate. */
 int
-c_rust_crate(PithValue *name, PithValue *root, PithValue *header)
+c_abit_foggy_rust_crate(PithValue *name, PithValue *root,
+                        PithValue *header)
 {
     if (name == NULL || root == NULL ||
         pithStringLength(name) == 0 || pithStringLength(root) == 0) {
@@ -65,12 +65,17 @@ c_rust_crate(PithValue *name, PithValue *root, PithValue *header)
         return 0;   /* diagnostics already emitted; fail the spec */
 
     /* The command writes the archive relative to the build CWD; the
-       graph edge carries the bare name (thorn prefixes the out-dir). */
+       graph edge carries the bare name (thorn prefixes the out-dir).
+       The audit edge consumes the out-dir-prefixed path - the same
+       string the spec's add_source uses (SCOPING.md section 3.3). */
     const char *od = getenv("THORN_OUT_DIR");
-    if (od == NULL || *od == '\0')
-        od = ".";
+    if (od == NULL || *od == '\0' || strcmp(od, ".") == 0)
+        od = "";
     char ar_cwd[1200];
-    int w = snprintf(ar_cwd, sizeof(ar_cwd), "%s/lib%s.a", od, c.name);
+    int w = (od[0] == '\0')
+                ? snprintf(ar_cwd, sizeof(ar_cwd), "lib%s.a", c.name)
+                : snprintf(ar_cwd, sizeof(ar_cwd), "%s/lib%s.a", od,
+                           c.name);
     if (w < 0 || (size_t)w >= sizeof(ar_cwd)) {
         diag("artifact path for crate '%s' exceeds the path limit",
              c.name);
@@ -116,9 +121,13 @@ c_rust_crate(PithValue *name, PithValue *root, PithValue *header)
         strlist_free(&want);
 
         char stamp[1024];
-        int sw = snprintf(stamp, sizeof(stamp),
-                 "mkdir -p %s/.thorn-rs && %s && touch "
-                 "%s/.thorn-rs/%s.verified", od, vcmd, od, c.name);
+        int sw = (od[0] == '\0')
+            ? snprintf(stamp, sizeof(stamp),
+                       "mkdir -p .thorn-rs && %s && touch "
+                       ".thorn-rs/%s.verified", vcmd, c.name)
+            : snprintf(stamp, sizeof(stamp),
+                       "mkdir -p %s/.thorn-rs && %s && touch "
+                       "%s/.thorn-rs/%s.verified", od, vcmd, od, c.name);
         char stamp_edge[256];
         int ew = snprintf(stamp_edge, sizeof(stamp_edge),
                  ".thorn-rs/%s.verified", c.name);
@@ -131,7 +140,7 @@ c_rust_crate(PithValue *name, PithValue *root, PithValue *header)
 
         vo = pithNewString(stamp_edge);
         vc = pithNewString(stamp);
-        vi = pithNewString(edge_out);
+        vi = pithNewString(ar_cwd);
         ok = c_engine_add_command(vo, vc, vi);
         pithRelease(vo);
         pithRelease(vc);
@@ -151,7 +160,7 @@ c_rust_crate(PithValue *name, PithValue *root, PithValue *header)
  * Audits a built archive: every symbol the crate declares and every
  * declaration in the contract header must be exported. */
 int
-c_rust_check(PithValue *archive, PithValue *header)
+c_abit_foggy_rust_check(PithValue *archive, PithValue *header)
 {
     if (archive == NULL || pithStringLength(archive) == 0) {
         diag("rust.check() expects an archive path");
@@ -161,13 +170,6 @@ c_rust_check(PithValue *archive, PithValue *header)
                         ? pithStringData(header)
                         : NULL;
     return verify_archive(pithStringData(archive), NULL, h) == 0;
-}
-
-void
-thorn_plugin_init(PithContext *ctx)
-{
-    pith_register_ns_fn(ctx, "rust", "crate", c_rust_crate, 'w', "ppp");
-    pith_register_ns_fn(ctx, "rust", "check", c_rust_check, 'w', "pp");
 }
 
 /* The brain, as one translation unit. */

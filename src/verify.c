@@ -352,7 +352,7 @@ verify_edge_command(const char *archive, const char *header,
     size_t len = strlen(buf);
     int w = snprintf(buf + len, n - len,
                      "; do nm -g --defined-only %s 2>/dev/null"
-                     " | grep -qw \"$s\" || exit 1; done", archive);
+                     " | grep -qw \"$$s\" || exit 1; done", archive);
     strlist_free(&want);
     return (w < 0 || (size_t)w >= n - len) ? 1 : 0;
 }

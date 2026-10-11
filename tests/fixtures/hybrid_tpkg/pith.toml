@@ -1,0 +1,4 @@
+# hybrid_tpkg - one unified thorn spec driving C and Rust.
+
+[deps]
+thorn-rs = "../../../dist/thorn-rs.tpkg"

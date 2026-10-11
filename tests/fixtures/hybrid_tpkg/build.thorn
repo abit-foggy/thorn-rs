@@ -1,0 +1,9 @@
+engine.project("hybrid_test")
+engine.backend("ninja")
+
+rust.crate("safe", "rust/src/lib.rs", "include/safe.h")
+
+engine.add_target("app", engine.exe)
+engine.add_source("app", "src/main.c")
+engine.add_source("app", "out/libsafe.a")
+engine.add_order_dep("app", "out/.thorn-rs/safe.verified")

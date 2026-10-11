@@ -44,6 +44,8 @@ dist/plugin.o: src/plugin.c $(SRC) $(HDR)
 
 dist/manifest: dist/plugin.o
 	printf 'author = "abit-foggy"\nmodule = "rust"\n' > $@
+	printf 'fn crate w 3\n' >> $@
+	printf 'fn check w 2\n' >> $@
 
 dist/thorn-rs.tpkg: dist/plugin.o dist/manifest
 	tar -cf $@ -C dist plugin.o manifest
