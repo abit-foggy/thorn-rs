@@ -1,0 +1,4 @@
+# hybrid_tpkg - plugins from github
+
+[plugins]
+thorn-rs = "abit-foggy/thorn-rs"

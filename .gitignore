@@ -9,4 +9,7 @@
 *.d
 .ninja_deps
 .ninja_log
-docs/
+docs/tests/fixtures/hybrid_tpkg/out/
+tests/fixtures/hybrid_tpkg/.thorn/
+tests/fixtures/hybrid_tpkg/.thorn-rs/
+tests/fixtures/hybrid_tpkg/.pith/
