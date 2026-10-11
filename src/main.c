@@ -23,6 +23,7 @@
 #include "include/plan.h"
 #include "include/rust.h"
 #include "include/scan.h"
+#include "include/verify.h"
 
 enum { FMT_NONE = 0, FMT_NINJA = 1, FMT_MAKE = 2 };
 
@@ -60,7 +61,11 @@ usage(FILE *out)
         "    --cfg SPEC            repeatable, e.g. 'feature=\"std\"'\n"
         "    --rustflag FLAG       repeatable extra rustc pass\n"
         "    --rustc BIN           rustc binary (default: RUSTC env, "
-        "then PATH)\n\n"
+        "then PATH)\n"
+        "    --header FILE         C-ABI contract; emit stamps a "
+        "verify edge,\n"
+        "                          check audits the archive against it\n\n"
+        "    thorn-rs check <archive.a> [--expect SYM] [--header FILE]\n\n"
         "EXIT CODES: 0 ok; 1 scan/plan failure; 2 file I/O; 64 usage\n");
 }
 
@@ -237,6 +242,11 @@ parse_args(int argc, char **argv, RustCrate *c, int *format,
                 return THORN_RS_EXIT_USAGE;
             }
             consumes = 1;
+        } else if (strcmp(a, "--header") == 0) {
+            if (v == NULL)
+                return bad_flag_ret(a);
+            snprintf(c->header, sizeof(c->header), "%s", v);
+            consumes = 1;
         } else if (strcmp(a, "--extern") == 0) {
             if (v == NULL)
                 return bad_flag_ret(a);
@@ -286,6 +296,63 @@ parse_args(int argc, char **argv, RustCrate *c, int *format,
         return THORN_RS_EXIT_USAGE;
     }
     return 0;
+}
+
+/* thorn-rs check <archive.a> [--expect SYM]... [--header FILE] */
+static int
+cmd_check(int argc, char **argv)
+{
+    const char *archive = NULL;
+    const char *header = NULL;
+    StrList expects = {0};
+    int archive_seen = 0;
+
+    for (int i = 0; i < argc; i++) {
+        const char *a = argv[i];
+        const char *v = (i + 1 < argc) ? argv[i + 1] : NULL;
+
+        if (strcmp(a, "--expect") == 0) {
+            if (v == NULL) {
+                strlist_free(&expects);
+                return bad_flag_ret(a);
+            }
+            strlist_push(&expects, v);
+            i++;
+        } else if (strcmp(a, "--header") == 0) {
+            if (v == NULL) {
+                strlist_free(&expects);
+                return bad_flag_ret(a);
+            }
+            header = v;
+            i++;
+        } else if (a[0] == '-' && a[1] != '\0') {
+            strlist_free(&expects);
+            diag("unknown flag '%s'", a);
+            return THORN_RS_EXIT_USAGE;
+        } else {
+            if (archive_seen) {
+                strlist_free(&expects);
+                diag("unexpected extra argument '%s'", a);
+                return THORN_RS_EXIT_USAGE;
+            }
+            archive_seen = 1;
+            archive = a;
+        }
+    }
+
+    if (!archive_seen) {
+        strlist_free(&expects);
+        diag("check expects an archive path");
+        return THORN_RS_EXIT_USAGE;
+    }
+    if (header && has_whitespace(header)) {
+        strlist_free(&expects);
+        diag("header path contains whitespace: '%s'", header);
+        return THORN_RS_EXIT_SCAN;
+    }
+    int rc = verify_archive(archive, &expects, header);
+    strlist_free(&expects);
+    return rc;
 }
 
 static int
@@ -426,6 +493,8 @@ main(int argc, char **argv)
         return cmd_run(1, argc - 2, argv + 2);
     if (strcmp(cmd, "plan") == 0)
         return cmd_run(0, argc - 2, argv + 2);
+    if (strcmp(cmd, "check") == 0)
+        return cmd_check(argc - 2, argv + 2);
 
     diag("unknown command '%s'", cmd);
     usage(stderr);

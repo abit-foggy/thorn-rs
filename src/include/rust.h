@@ -56,6 +56,7 @@ typedef struct RustCrate {
     int  no_std;            /* scanner: #![no_std] seen              */
     int  has_panic_handler; /* scanner: #[panic_handler] seen        */
     char rustc[1024];       /* tool name to emit; never an abs path  */
+    char header[1024];      /* C-ABI contract header for verify edge */
     StrList cfgs;           /* --cfg specs                           */
     StrList rustflags;      /* extra -C/... passes                   */
     StrList externs;        /* --extern name=path                    */

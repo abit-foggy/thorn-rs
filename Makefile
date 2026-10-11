@@ -4,7 +4,7 @@ CC     ?= cc
 CFLAGS ?= -std=c99 -O2 -Wall -Wextra -Wpedantic
 
 SRC = src/main.c src/rust.c src/scan.c src/plan.c \
-      src/emit_ninja.c src/emit_make.c
+      src/emit_ninja.c src/emit_make.c src/verify.c
 HDR = src/include/rust.h src/include/scan.h \
       src/include/plan.h src/include/emit.h
 BIN = bin/thorn-rs
