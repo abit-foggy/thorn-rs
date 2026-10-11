@@ -1,5 +1,11 @@
-/* rust.c - crate model lifecycle, string lists, diagnostics, and the
- * whitespace invariant shared with thorn's graph.c. */
+/*
+ * rust.c - crate model lifecycle, string lists, diagnostics.
+ *
+ * Part of thorn-rs, the zero-cargo Rust staticlib companion for thorn.
+ * Copyright (c) 2026 abit-foggy
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,9 +13,11 @@
 
 #include "include/rust.h"
 
-void diag(const char *fmt, ...)
+void
+diag(const char *fmt, ...)
 {
     va_list ap;
+
     fputs("thorn-rs: ", stderr);
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
@@ -17,30 +25,32 @@ void diag(const char *fmt, ...)
     fputc('\n', stderr);
 }
 
-int strlist_push(StrList *l, const char *s)
+int
+strlist_push(StrList *l, const char *s)
 {
-    if (!l || !s)
+    if (l == NULL || s == NULL)
         return -1;
     if (l->count == l->cap) {
         size_t ncap = l->cap ? l->cap * 2 : 8;
         char **ni = realloc(l->items, ncap * sizeof(*ni));
-        if (!ni)
+        if (ni == NULL)
             return -1;
         l->items = ni;
         l->cap = ncap;
     }
     size_t len = strlen(s) + 1;
     char *copy = malloc(len);
-    if (!copy)
+    if (copy == NULL)
         return -1;
     memcpy(copy, s, len);
     l->items[l->count++] = copy;
     return 0;
 }
 
-void strlist_free(StrList *l)
+void
+strlist_free(StrList *l)
 {
-    if (!l)
+    if (l == NULL)
         return;
     for (size_t i = 0; i < l->count; i++)
         free(l->items[i]);
@@ -49,9 +59,10 @@ void strlist_free(StrList *l)
     l->count = l->cap = 0;
 }
 
-int has_whitespace(const char *s)
+int
+has_whitespace(const char *s)
 {
-    if (!s)
+    if (s == NULL)
         return 0;
     for (const char *p = s; *p; p++) {
         if (*p == ' ' || *p == '\t' || *p == '\n' ||
@@ -61,9 +72,10 @@ int has_whitespace(const char *s)
     return 0;
 }
 
-int path_safe(const char *s)
+int
+path_safe(const char *s)
 {
-    if (!s || !*s || has_whitespace(s))
+    if (s == NULL || *s == '\0' || has_whitespace(s))
         return 0;
     for (const char *p = s; *p; p++) {
         unsigned char ch = (unsigned char)*p;
@@ -82,19 +94,21 @@ int path_safe(const char *s)
     return 1;
 }
 
-void rust_crate_init(RustCrate *c)
+void
+rust_crate_init(RustCrate *c)
 {
     memset(c, 0, sizeof(*c));
     c->kind = RUST_CRATE_STATICLIB;
     snprintf(c->edition, sizeof(c->edition), "2021");
     c->opt_level = RUST_OPT_UNSET;
-    c->panic_abort = -1;   /* unspecified: scanner applies no_std default */
+    c->panic_abort = -1;   /* scanner applies the no_std default */
     c->debuginfo = -1;
 }
 
-void rust_crate_free(RustCrate *c)
+void
+rust_crate_free(RustCrate *c)
 {
-    if (!c)
+    if (c == NULL)
         return;
     strlist_free(&c->cfgs);
     strlist_free(&c->rustflags);

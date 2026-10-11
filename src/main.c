@@ -1,16 +1,15 @@
-/* main.c - thorn-rs standalone CLI driver (Phase 0).
+/*
+ * main.c - thorn-rs CLI driver.
  *
- * Subcommands:
- *   thorn-rs emit  <crate-root> [flags]   write a ninja or make fragment
- *   thorn-rs plan  <crate-root> [flags]   print the planned rustc command
- *   thorn-rs version | help
+ * `emit` writes a build fragment; `plan` prints the rustc command.
+ * Pipeline: scrub env -> parse -> scan -> resolve -> plan -> emit.
+ * Exit codes: 0 ok, 1 scan/plan, 2 I/O, 64 usage.
  *
- * Ordering of the pipeline (docs/SCOPING.md section 2.2):
- *   scrub env -> parse flags -> scan crate -> resolve toolchain ->
- *   plan command -> emit fragment. Scanner failures exit before any
- *   fragment bytes are written; file I/O failures are a distinct class.
- *
- * Exit codes (README): 0 ok, 1 scan/plan, 2 I/O, 64 usage. */
+ * Part of thorn-rs, the zero-cargo Rust staticlib companion for thorn.
+ * Copyright (c) 2026 abit-foggy
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
 #define _POSIX_C_SOURCE 200809L
 
 #include <errno.h>
@@ -27,7 +26,8 @@
 
 enum { FMT_NONE = 0, FMT_NINJA = 1, FMT_MAKE = 2 };
 
-static void usage(FILE *out)
+static void
+usage(FILE *out)
 {
     fprintf(out,
         "thorn-rs " THORN_RS_VERSION " - zero-cargo #![no_std] Rust "
@@ -64,28 +64,22 @@ static void usage(FILE *out)
         "EXIT CODES: 0 ok; 1 scan/plan failure; 2 file I/O; 64 usage\n");
 }
 
-static void bad_flag(const char *flag)
+static int
+bad_flag_ret(const char *flag)
 {
     diag("missing value for %s", flag);
-}
-
-static int bad_flag_ret(const char *flag)
-{
-    bad_flag(flag);
     return THORN_RS_EXIT_USAGE;
 }
 
-/* ------------------------------------------------------------------ */
-/* Format helpers                                                      */
-/* ------------------------------------------------------------------ */
-
-static int ends_with(const char *s, const char *suffix)
+static int
+ends_with(const char *s, const char *suffix)
 {
     size_t ls = strlen(s), lx = strlen(suffix);
     return ls >= lx && strcmp(s + ls - lx, suffix) == 0;
 }
 
-static int infer_format(const char *out)
+static int
+infer_format(const char *out)
 {
     if (ends_with(out, ".ninja"))
         return FMT_NINJA;
@@ -99,10 +93,12 @@ static int infer_format(const char *out)
     return FMT_NONE;
 }
 
-static const char *dir_name(const char *p, char *buf, size_t n)
+static const char *
+dir_name(const char *p, char *buf, size_t n)
 {
     const char *slash = strrchr(p, '/');
-    if (!slash) {
+
+    if (slash == NULL) {
         snprintf(buf, n, ".");
         return buf;
     }
@@ -116,10 +112,11 @@ static const char *dir_name(const char *p, char *buf, size_t n)
     return buf;
 }
 
-/* mkdir -p semantics over the fragment's parent directory. */
-static int ensure_parent_dir(const char *path)
+static int
+ensure_parent_dir(const char *path)
 {
     char dir[1024];
+
     dir_name(path, dir, sizeof(dir));
     if (strcmp(dir, ".") == 0)
         return 0;
@@ -140,11 +137,8 @@ static int ensure_parent_dir(const char *path)
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* Flag parsing                                                        */
-/* ------------------------------------------------------------------ */
-
-static int set_opt_level(RustCrate *c, const char *v)
+static int
+set_opt_level(RustCrate *c, const char *v)
 {
     if (strlen(v) != 1)
         return -1;
@@ -157,7 +151,8 @@ static int set_opt_level(RustCrate *c, const char *v)
     }
 }
 
-static int set_edition(RustCrate *c, const char *v)
+static int
+set_edition(RustCrate *c, const char *v)
 {
     if (strcmp(v, "2015") && strcmp(v, "2018") &&
         strcmp(v, "2021") && strcmp(v, "2024"))
@@ -166,11 +161,9 @@ static int set_edition(RustCrate *c, const char *v)
     return 0;
 }
 
-/* Parses argv into the crate model and CLI-only fields.
- * Returns 0, THORN_RS_EXIT_SCAN (value validation), or
- * THORN_RS_EXIT_USAGE (malformed command line). */
-static int parse_args(int argc, char **argv, RustCrate *c, int *format,
-                      int *rustc_given, char *rustc_flag, size_t rsz)
+static int
+parse_args(int argc, char **argv, RustCrate *c, int *format,
+           int *rustc_given, char *rustc_flag, size_t rsz)
 {
     *format = FMT_NONE;
     *rustc_given = 0;
@@ -182,12 +175,12 @@ static int parse_args(int argc, char **argv, RustCrate *c, int *format,
         int consumes = 0;
 
         if (strcmp(a, "--name") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             snprintf(c->name, sizeof(c->name), "%s", v);
             consumes = 1;
         } else if (strcmp(a, "--format") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             if (strcmp(v, "ninja") == 0)
                 *format = FMT_NINJA;
@@ -199,17 +192,17 @@ static int parse_args(int argc, char **argv, RustCrate *c, int *format,
             }
             consumes = 1;
         } else if (strcmp(a, "--out") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             snprintf(c->frag, sizeof(c->frag), "%s", v);
             consumes = 1;
         } else if (strcmp(a, "--artifact") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             snprintf(c->out, sizeof(c->out), "%s", v);
             consumes = 1;
         } else if (strcmp(a, "--edition") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             if (set_edition(c, v) != 0) {
                 diag("unknown --edition '%s' (expected 2015, 2018, "
@@ -218,12 +211,12 @@ static int parse_args(int argc, char **argv, RustCrate *c, int *format,
             }
             consumes = 1;
         } else if (strcmp(a, "--target") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             snprintf(c->target, sizeof(c->target), "%s", v);
             consumes = 1;
         } else if (strcmp(a, "--opt-level") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             if (set_opt_level(c, v) != 0) {
                 diag("unknown --opt-level '%s' (expected 0-3, s, or z)",
@@ -232,7 +225,7 @@ static int parse_args(int argc, char **argv, RustCrate *c, int *format,
             }
             consumes = 1;
         } else if (strcmp(a, "--panic") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             if (strcmp(v, "abort") == 0)
                 c->panic_abort = 1;
@@ -245,28 +238,28 @@ static int parse_args(int argc, char **argv, RustCrate *c, int *format,
             }
             consumes = 1;
         } else if (strcmp(a, "--extern") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             strlist_push(&c->externs, v);
             consumes = 1;
         } else if (strcmp(a, "-L") == 0 ||
                    strcmp(a, "--search-path") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             strlist_push(&c->search_paths, v);
             consumes = 1;
         } else if (strcmp(a, "--cfg") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             strlist_push(&c->cfgs, v);
             consumes = 1;
         } else if (strcmp(a, "--rustflag") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             strlist_push(&c->rustflags, v);
             consumes = 1;
         } else if (strcmp(a, "--rustc") == 0) {
-            if (!v)
+            if (v == NULL)
                 return bad_flag_ret(a);
             snprintf(rustc_flag, rsz, "%s", v);
             *rustc_given = 1;
@@ -283,7 +276,6 @@ static int parse_args(int argc, char **argv, RustCrate *c, int *format,
                 return THORN_RS_EXIT_USAGE;
             }
             root_seen = 1;
-            /* stashed below via c->root scratch; scan re-copies it */
             snprintf(c->root, sizeof(c->root), "%s", a);
         }
         i += consumes;
@@ -296,11 +288,8 @@ static int parse_args(int argc, char **argv, RustCrate *c, int *format,
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* Commands                                                            */
-/* ------------------------------------------------------------------ */
-
-static int cmd_run(int emit_mode, int argc, char **argv)
+static int
+cmd_run(int emit_mode, int argc, char **argv)
 {
     RustCrate crate;
     rust_crate_init(&crate);
@@ -316,7 +305,6 @@ static int cmd_run(int emit_mode, int argc, char **argv)
         return rc;
     }
 
-    /* Fragment destination: explicit, else per-format default. */
     if (crate.frag[0] == '\0') {
         if (format == FMT_MAKE)
             snprintf(crate.frag, sizeof(crate.frag), "build-rs.mk");
@@ -332,20 +320,18 @@ static int cmd_run(int emit_mode, int argc, char **argv)
                 rust_crate_free(&crate);
                 return THORN_RS_EXIT_USAGE;
             }
-            /* plan never writes a fragment; the default derivation
-               above only fixes the artifact-path base. */
+            /* plan never writes a fragment; the default above only
+               fixes the artifact-path base. */
             format = FMT_NINJA;
         }
     }
 
-    /* 1. scan (fails fast before any toolchain work) */
     rc = scan_crate(crate.root, &crate);
     if (rc != SCAN_OK) {
         rust_crate_free(&crate);
         return rc == SCAN_IO ? THORN_RS_EXIT_IO : THORN_RS_EXIT_SCAN;
     }
 
-    /* 2. artifact path: explicit, else <fragment dir>/lib<name>.a */
     if (crate.out[0] == '\0') {
         char dir[1024];
         dir_name(crate.frag, dir, sizeof(dir));
@@ -368,7 +354,6 @@ static int cmd_run(int emit_mode, int argc, char **argv)
         return THORN_RS_EXIT_SCAN;
     }
 
-    /* 3. resolve the toolchain (diagnostics only; nothing emitted yet) */
     char tool[1024], resolved[4096];
     rc = plan_locate_rustc(rustc_given ? rustc_flag : NULL, tool,
                            sizeof(tool), resolved, sizeof(resolved));
@@ -378,7 +363,6 @@ static int cmd_run(int emit_mode, int argc, char **argv)
     }
     plan_probe_version(resolved);
 
-    /* 4. plan */
     char cmd[4096];
     if (plan_command(&crate, tool, cmd, sizeof(cmd)) != 0) {
         diag("cannot plan the rustc command for crate '%s'", crate.name);
@@ -392,13 +376,12 @@ static int cmd_run(int emit_mode, int argc, char **argv)
         return THORN_RS_EXIT_OK;
     }
 
-    /* 5. emit */
     if (ensure_parent_dir(crate.frag) != 0) {
         rust_crate_free(&crate);
         return THORN_RS_EXIT_IO;
     }
     FILE *fp = fopen(crate.frag, "w");
-    if (!fp) {
+    if (fp == NULL) {
         diag("cannot write fragment '%s'", crate.frag);
         rust_crate_free(&crate);
         return THORN_RS_EXIT_IO;
@@ -420,7 +403,8 @@ static int cmd_run(int emit_mode, int argc, char **argv)
     return THORN_RS_EXIT_OK;
 }
 
-int main(int argc, char **argv)
+int
+main(int argc, char **argv)
 {
     plan_scrub_env();
 

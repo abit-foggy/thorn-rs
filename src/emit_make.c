@@ -1,31 +1,36 @@
-/* emit_make.c - POSIX/GNU Make fragment emitter.
+/*
+ * emit_make.c - POSIX/GNU Make fragment emitter.
  *
- * Emits the exact snippet shape from the Phase 0 contract: a single
- * explicit rule per crate, GCC-style depfile inclusion via -include
- * (silently ignored on the first build), and RUSTC ?= so the RUSTC
- * environment variable flows through without thorn-rs ever reading it.
- * Recipe lines use real tabs and $@/$< automatics; the rustc argv is
- * identical to the ninja fragment's command expansion. */
+ * RUSTC ?= lets the RUSTC environment flow through without thorn-rs
+ * reading it; -include pulls in the depfile once rustc has written it.
+ *
+ * Part of thorn-rs, the zero-cargo Rust staticlib companion for thorn.
+ * Copyright (c) 2026 abit-foggy
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
 #include <string.h>
 
 #include "include/emit.h"
 #include "include/plan.h"
 
-static const char *base_name(const char *p)
+static const char *
+base_name(const char *p)
 {
     const char *b = strrchr(p, '/');
     return b ? b + 1 : p;
 }
 
-static int validate_paths(const RustCrate *c)
+static int
+validate_paths(const RustCrate *c)
 {
     struct {
         const char *path;
         const char *what;
     } checks[] = {
-        { c->frag,    "fragment path"   },
-        { c->out,     "artifact path"   },
-        { c->root,    "crate root path" },
+        { c->frag, "fragment path"   },
+        { c->out,  "artifact path"   },
+        { c->root, "crate root path" },
     };
     for (size_t i = 0; i < sizeof(checks) / sizeof(checks[0]); i++) {
         if (!path_safe(checks[i].path)) {
@@ -37,7 +42,8 @@ static int validate_paths(const RustCrate *c)
     return 0;
 }
 
-int emit_make(const RustCrate *c, const char *tool, FILE *out)
+int
+emit_make(const RustCrate *c, const char *tool, FILE *out)
 {
     int rc = validate_paths(c);
     if (rc)

@@ -1,13 +1,15 @@
-/* plan.c - deterministic rustc command planner.
+/*
+ * plan.c - deterministic rustc command planner.
  *
- * The planner is the single site where the rustc invocation is shaped
- * (docs/SCOPING.md section 3.2). Given identical crate fields and
- * environment inputs, the emitted command is byte-identical:
- *   - the environment is scrubbed (RUSTFLAGS, RUSTC_WRAPPER, CARGO_*)
- *     before anything is read;
- *   - the tool is resolved flag -> env -> PATH and referenced in output
- *     by its user-facing name only;
- *   - every path passing through has been whitespace-validated upstream. */
+ * The environment is scrubbed before it is read, and fragments
+ * reference the tool by name only, so identical inputs yield
+ * identical command bytes.
+ *
+ * Part of thorn-rs, the zero-cargo Rust staticlib companion for thorn.
+ * Copyright (c) 2026 abit-foggy
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
 #define _POSIX_C_SOURCE 200809L
 
 #include <stdarg.h>
@@ -20,11 +22,8 @@
 
 extern char **environ;
 
-/* ------------------------------------------------------------------ */
-/* Environment scrub                                                   */
-/* ------------------------------------------------------------------ */
-
-void plan_scrub_env(void)
+void
+plan_scrub_env(void)
 {
     static const char *const exact[] = {
         "RUSTFLAGS", "RUSTC_WRAPPER", NULL
@@ -32,10 +31,10 @@ void plan_scrub_env(void)
     for (size_t i = 0; exact[i]; i++)
         unsetenv(exact[i]);
 
-    /* CARGO_*: iterate a snapshot index; unsetenv shifts environ. */
+    /* Snapshot index: unsetenv shifts environ. */
     for (size_t i = 0; environ && environ[i]; i++) {
         char *eq = strchr(environ[i], '=');
-        if (!eq)
+        if (eq == NULL)
             continue;
         size_t nlen = (size_t)(eq - environ[i]);
         if (nlen > 6 && strncmp(environ[i], "CARGO_", 6) == 0) {
@@ -44,30 +43,26 @@ void plan_scrub_env(void)
                 memcpy(name, environ[i], nlen);
                 name[nlen] = '\0';
                 unsetenv(name);
-                i = (size_t)-1; /* restart scan; environ order changed */
+                i = (size_t)-1;
             }
         }
     }
 }
 
-/* ------------------------------------------------------------------ */
-/* Toolchain resolution                                                */
-/* ------------------------------------------------------------------ */
-
-/* thorn main.c validate_executable semantics: absolute/relative paths
-   are checked directly; bare names are searched over PATH with the
-   default "/usr/bin:/bin". */
-static int executable_ok(const char *cand)
+/* thorn validate_executable semantics: paths with '/' are checked
+   directly; bare names are searched over PATH. */
+static int
+executable_ok(const char *cand)
 {
-    if (!cand || !*cand)
+    if (cand == NULL || *cand == '\0')
         return 0;
     if (strchr(cand, '/'))
         return access(cand, X_OK) == 0;
     const char *path_env = getenv("PATH");
-    if (!path_env)
+    if (path_env == NULL)
         path_env = "/usr/bin:/bin";
     char *copy = strdup(path_env);
-    if (!copy)
+    if (copy == NULL)
         return 0;
     const char *saveptr = NULL;
     int found = 0;
@@ -84,13 +79,14 @@ static int executable_ok(const char *cand)
     return found;
 }
 
-static int find_in_path(const char *name, char *out, size_t n)
+static int
+find_in_path(const char *name, char *out, size_t n)
 {
     const char *path_env = getenv("PATH");
-    if (!path_env)
+    if (path_env == NULL)
         path_env = "/usr/bin:/bin";
     char *copy = strdup(path_env);
-    if (!copy)
+    if (copy == NULL)
         return 0;
     const char *saveptr = NULL;
     int found = 0;
@@ -108,8 +104,9 @@ static int find_in_path(const char *name, char *out, size_t n)
     return found;
 }
 
-int plan_locate_rustc(const char *flag_value, char *emit_name,
-                      size_t esz, char *resolved, size_t rsz)
+int
+plan_locate_rustc(const char *flag_value, char *emit_name, size_t esz,
+                  char *resolved, size_t rsz)
 {
     const char *cand = (flag_value && *flag_value) ? flag_value
                                                    : getenv("RUSTC");
@@ -127,25 +124,25 @@ int plan_locate_rustc(const char *flag_value, char *emit_name,
 
     char found[4096];
     if (!find_in_path("rustc", found, sizeof(found))) {
-        diag("rustc not found in PATH; install Rust or set RUSTC/--rustc");
+        diag("rustc not found in PATH; install Rust or set "
+             "RUSTC/--rustc");
         return THORN_RS_EXIT_SCAN;
     }
-    /* Emitted fragments reference the tool by name only; the absolute
-       path is a stderr diagnostic (docs/SCOPING.md section 5.6). */
     snprintf(emit_name, esz, "rustc");
     if (resolved && rsz)
         snprintf(resolved, rsz, "%s", found);
     return 0;
 }
 
-void plan_probe_version(const char *resolved)
+void
+plan_probe_version(const char *resolved)
 {
-    if (!resolved || !*resolved)
+    if (resolved == NULL || *resolved == '\0')
         return;
     char cmd[4200];
     snprintf(cmd, sizeof(cmd), "%s --version 2>/dev/null", resolved);
     FILE *pp = popen(cmd, "r");
-    if (!pp)
+    if (pp == NULL)
         return;
     char line[256];
     if (fgets(line, sizeof(line), pp)) {
@@ -155,27 +152,21 @@ void plan_probe_version(const char *resolved)
     pclose(pp);
 }
 
-/* ------------------------------------------------------------------ */
-/* Flag-segment planning                                               */
-/* ------------------------------------------------------------------ */
-
-/* Bounded append; returns 0 on success, 1 on truncation. */
-static int seg(char *buf, size_t n, const char *fmt, ...)
+/* Bounded append; 0 on success, 1 on truncation. */
+static int
+seg(char *buf, size_t n, const char *fmt, ...)
 {
     size_t len = strlen(buf);
     va_list ap;
+
     va_start(ap, fmt);
     int written = vsnprintf(buf + len, n - len, fmt, ap);
     va_end(ap);
     return (written < 0 || (size_t)written >= n - len) ? 1 : 0;
 }
 
-static int valid_extra_flag(const char *s)
-{
-    return s[0] == '-' && !has_whitespace(s);
-}
-
-int plan_rustflags(const RustCrate *c, char *buf, size_t n)
+int
+plan_rustflags(const RustCrate *c, char *buf, size_t n)
 {
     buf[0] = '\0';
     if (c->panic_abort == 1 && seg(buf, n, " -C panic=abort"))
@@ -199,8 +190,9 @@ int plan_rustflags(const RustCrate *c, char *buf, size_t n)
     for (size_t i = 0; i < c->externs.count; i++) {
         const char *e = c->externs.items[i];
         const char *eq = strchr(e, '=');
-        if (!eq || eq == e || !eq[1] || has_whitespace(e)) {
-            diag("--extern expects NAME=PATH without whitespace: '%s'", e);
+        if (eq == NULL || eq == e || eq[1] == '\0' || has_whitespace(e)) {
+            diag("--extern expects NAME=PATH without whitespace: '%s'",
+                 e);
             return 1;
         }
         if (seg(buf, n, " --extern %s", e))
@@ -216,21 +208,23 @@ int plan_rustflags(const RustCrate *c, char *buf, size_t n)
             return 1;
     }
     for (size_t i = 0; i < c->rustflags.count; i++) {
-        if (!valid_extra_flag(c->rustflags.items[i])) {
+        const char *f = c->rustflags.items[i];
+        if (f[0] != '-' || has_whitespace(f)) {
             diag("--rustflag must start with '-' and contain no "
-                 "whitespace: '%s'", c->rustflags.items[i]);
+                 "whitespace: '%s'", f);
             return 1;
         }
-        if (seg(buf, n, " %s", c->rustflags.items[i]))
+        if (seg(buf, n, " %s", f))
             return 1;
     }
     return 0;
 }
 
-int plan_command(const RustCrate *c, const char *tool, char *buf,
-                 size_t n)
+int
+plan_command(const RustCrate *c, const char *tool, char *buf, size_t n)
 {
     char flags[2048];
+
     if (plan_rustflags(c, flags, sizeof(flags)))
         return 1;
     buf[0] = '\0';

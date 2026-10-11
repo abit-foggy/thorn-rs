@@ -1,30 +1,36 @@
-/* emit_ninja.c - standalone build.ninja fragment emitter.
+/*
+ * emit_ninja.c - standalone build.ninja fragment emitter.
  *
- * Emits the exact rule/build shape from docs/SCOPING.md section 3.4:
- * a dedicated `rule rustc` with per-edge variables, wired into ninja's
- * native depfile protocol (depfile = $out.d, deps = gcc) - the same
- * convention thorn's rule cc uses, so the fragment composes with any
- * thorn-generated build.ninja. */
+ * Uses ninja's native depfile protocol, the same convention as
+ * thorn's rule cc, so fragments compose with thorn-generated files.
+ *
+ * Part of thorn-rs, the zero-cargo Rust staticlib companion for thorn.
+ * Copyright (c) 2026 abit-foggy
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
 #include <string.h>
 
 #include "include/emit.h"
 #include "include/plan.h"
 
-static const char *base_name(const char *p)
+static const char *
+base_name(const char *p)
 {
     const char *b = strrchr(p, '/');
     return b ? b + 1 : p;
 }
 
-static int validate_paths(const RustCrate *c)
+static int
+validate_paths(const RustCrate *c)
 {
     struct {
         const char *path;
         const char *what;
     } checks[] = {
-        { c->frag,    "fragment path"   },
-        { c->out,     "artifact path"   },
-        { c->root,    "crate root path" },
+        { c->frag, "fragment path"   },
+        { c->out,  "artifact path"   },
+        { c->root, "crate root path" },
     };
     for (size_t i = 0; i < sizeof(checks) / sizeof(checks[0]); i++) {
         if (!path_safe(checks[i].path)) {
@@ -36,7 +42,8 @@ static int validate_paths(const RustCrate *c)
     return 0;
 }
 
-int emit_ninja(const RustCrate *c, const char *tool, FILE *out)
+int
+emit_ninja(const RustCrate *c, const char *tool, FILE *out)
 {
     int rc = validate_paths(c);
     if (rc)

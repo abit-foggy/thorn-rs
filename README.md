@@ -73,13 +73,11 @@ thorn-rs version | help
 - Pure local source trees targeting `#![no_std]` / `core` / `alloc`.
 - Static libraries (`.a`) with standard C-ABI linkage only.
 - One Rust crate per C link (each staticlib bundles `core` +
-  `compiler_builtins`; see `docs/SCOPING.md` §5.1).
+  `compiler_builtins`).
 
 ## Links
 
-- **Design & ABI audit**: [docs/SCOPING.md](docs/SCOPING.md)
 - **Thorn (build system)**: [https://github.com/abit-foggy/thorn](https://github.com/abit-foggy/thorn)
-- **Kernel extension (thornk)**: [https://github.com/abit-foggy/thornk](https://github.com/abit-foggy/thornk)
 - **Issue Tracker**: [https://github.com/abit-foggy/thorn-rs/issues](https://github.com/abit-foggy/thorn-rs/issues)
 
 ## License

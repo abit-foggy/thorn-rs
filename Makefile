@@ -1,9 +1,5 @@
 # thorn-rs - zero-cargo #![no_std] Rust static libraries for thorn
-#
-# Phase 0: a standalone C99 tool with zero dependencies beyond libc
-# and the system rustc. The vendor/ submodules (thorn, pith) are
-# Phase 1 prerequisites (see docs/SCOPING.md section 4).
-
+# 
 CC     ?= cc
 CFLAGS ?= -std=c99 -O2 -Wall -Wextra -Wpedantic
 

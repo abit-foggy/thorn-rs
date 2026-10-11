@@ -1,31 +1,27 @@
-/* scan.c - C99 crate inspector for thorn-rs.
+/*
+ * scan.c - C99 crate inspector.
  *
- * Reads a crate root once (bounded), then normalizes it twice:
- *   - `clean`:     comments AND string/char literal contents blanked
- *                  (structure and newlines kept) - used for attribute
- *                  matching, so a `#[panic_handler]` hidden in a comment
- *                  or string can never satisfy the #![no_std] contract
- *                  (see tests/fixtures/missing-ph)
- *   - `nocomment`: comments blanked, string contents kept verbatim -
- *                  used to extract #![crate_name = "..."] values
+ * Comments and string/char literal contents are blanked before
+ * attribute matching, so a commented-out #[panic_handler] can never
+ * satisfy #![no_std].  A second pass keeps string contents for
+ * #![crate_name = "..."] extraction.
  *
- * Trust model (docs/SCOPING.md section 2.2): the crate root is a trusted
- * project input; this scanner is a bounded advisor that fails fast
- * before rustc, which remains the authority. */
+ * Part of thorn-rs, the zero-cargo Rust staticlib companion for thorn.
+ * Copyright (c) 2026 abit-foggy
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "include/scan.h"
 
-/* ------------------------------------------------------------------ */
-/* Bounded read                                                        */
-/* ------------------------------------------------------------------ */
-
-static int read_file(const char *path, char **out_buf, size_t *out_len)
+static int
+read_file(const char *path, char **out_buf, size_t *out_len)
 {
     FILE *fp = fopen(path, "rb");
-    if (!fp) {
+    if (fp == NULL) {
         diag("cannot open crate root '%s'", path);
         return SCAN_IO;
     }
@@ -48,7 +44,7 @@ static int read_file(const char *path, char **out_buf, size_t *out_len)
     }
     rewind(fp);
     char *buf = malloc((size_t)sz + 1);
-    if (!buf) {
+    if (buf == NULL) {
         diag("out of memory reading '%s'", path);
         fclose(fp);
         return SCAN_IO;
@@ -66,13 +62,9 @@ static int read_file(const char *path, char **out_buf, size_t *out_len)
     return SCAN_OK;
 }
 
-/* ------------------------------------------------------------------ */
-/* Normalizer                                                          */
-/* ------------------------------------------------------------------ */
-
-/* Newlines always survive (structure visibility); other characters are
- * kept verbatim in keep mode and blanked otherwise. */
-static void emit1(char *dst, size_t *o, char c, int keep)
+/* Newlines always survive; other characters depend on `keep`. */
+static void
+emit1(char *dst, size_t *o, char c, int keep)
 {
     if (c == '\n')
         dst[(*o)++] = '\n';
@@ -80,20 +72,21 @@ static void emit1(char *dst, size_t *o, char c, int keep)
         dst[(*o)++] = keep ? c : ' ';
 }
 
-/* Two-character sequences (comment delimiters) are always blanked. */
-static void blank2(char *dst, size_t *o)
+static void
+blank2(char *dst, size_t *o)
 {
     dst[*o] = ' ';
     dst[*o + 1] = ' ';
     *o += 2;
 }
 
-static void normalize(const char *src, size_t n, char *dst, int keep)
+static void
+normalize(const char *src, size_t n, char *dst, int keep)
 {
     size_t i = 0, o = 0;
     enum { S_CODE, S_LINE, S_BLOCK, S_STR, S_CHAR } st = S_CODE;
     int block_depth = 0;
-    int raw_hashes = 0;   /* raw string delimiter width, S_STR only */
+    int raw_hashes = 0;    /* raw string delimiter width, S_STR only */
 
     while (i < n) {
         char c = src[i];
@@ -168,8 +161,8 @@ static void normalize(const char *src, size_t n, char *dst, int keep)
             continue;
         }
 
-        /* S_CODE - code characters are always emitted verbatim; the
-           keep flag only governs string/char literal CONTENT. */
+        /* S_CODE: code characters are always verbatim; `keep` only
+           governs literal contents. */
         if (c == '/' && i + 1 < n && src[i + 1] == '/') {
             st = S_LINE;
             blank2(dst, &o);
@@ -183,7 +176,7 @@ static void normalize(const char *src, size_t n, char *dst, int keep)
             i += 2;
             continue;
         }
-        /* raw strings: r"...", r#"..."#, br##"..."## (hash count kept) */
+        /* raw strings: r"...", r#"..."#, br##"..."## */
         if ((c == 'r' || c == 'b') && i + 1 < n) {
             size_t j = i + (c == 'b' ? 1 : 0);
             if (j < n && src[j] == 'r') {
@@ -194,7 +187,7 @@ static void normalize(const char *src, size_t n, char *dst, int keep)
                     k++;
                 }
                 if (k < n && src[k] == '"') {
-                    size_t span = (k - i) + 1; /* prefix + opening quote */
+                    size_t span = (k - i) + 1;
                     raw_hashes = (int)h;
                     for (size_t q = 0; q < span; q++)
                         emit1(dst, &o, src[i + q], 1);
@@ -212,8 +205,7 @@ static void normalize(const char *src, size_t n, char *dst, int keep)
             continue;
         }
         if (c == '\'') {
-            /* char literal vs lifetime: '\'' and 'x' are literals,
-               'a as a lifetime prefix is a single code character. */
+            /* 'x' and '\'' are literals; 'a as a lifetime is not. */
             if (i + 1 < n && (src[i + 1] == '\\' ||
                               (i + 2 < n && src[i + 2] == '\''))) {
                 emit1(dst, &o, c, keep);
@@ -231,21 +223,20 @@ static void normalize(const char *src, size_t n, char *dst, int keep)
     dst[o] = '\0';
 }
 
-/* ------------------------------------------------------------------ */
-/* Whitespace-tolerant attribute matching                              */
-/* ------------------------------------------------------------------ */
-
-static const char *skip_ws(const char *p)
+static const char *
+skip_ws(const char *p)
 {
     while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
         p++;
     return p;
 }
 
-/* Find `#[name]` (inner=0) or `#![name]` (inner=1) in normalized text. */
-static int find_attr(const char *s, const char *name, int inner)
+/* Find `#[name]` (inner=0) or `#![name]` (inner=1). */
+static int
+find_attr(const char *s, const char *name, int inner)
 {
     size_t nl = strlen(name);
+
     for (const char *p = strchr(s, '#'); p; p = strchr(p + 1, '#')) {
         const char *q = p + 1;
         if (inner) {
@@ -265,12 +256,12 @@ static int find_attr(const char *s, const char *name, int inner)
     return 0;
 }
 
-/* Extract the string value of `#![name = "value"]` (needs a buffer in
- * which string contents survived: the `nocomment` pass). */
-static int find_attr_value(const char *s, const char *name, char *out,
-                           size_t outsz)
+/* Value of `#![name = "value"]`; needs string contents kept. */
+static int
+find_attr_value(const char *s, const char *name, char *out, size_t outsz)
 {
     size_t nl = strlen(name);
+
     for (const char *p = strchr(s, '#'); p; p = strchr(p + 1, '#')) {
         const char *q = p + 1;
         if (*q != '!')
@@ -297,17 +288,13 @@ static int find_attr_value(const char *s, const char *name, char *out,
     return 0;
 }
 
-/* ------------------------------------------------------------------ */
-/* Entry point                                                         */
-/* ------------------------------------------------------------------ */
-
-int scan_crate(const char *path, RustCrate *out)
+int
+scan_crate(const char *path, RustCrate *out)
 {
-    if (!path || !out)
+    if (path == NULL || out == NULL)
         return SCAN_INVALID;
 
-    /* Local copy: `out->root` may alias `path` (the CLI stores the
-       positional argument there); never self-assign through snprintf. */
+    /* `out->root` may alias `path`; never self-assign via snprintf. */
     char pathbuf[1024];
     if (strlen(path) >= sizeof(pathbuf)) {
         diag("crate root path exceeds %zu bytes", sizeof(pathbuf) - 1);
@@ -319,7 +306,7 @@ int scan_crate(const char *path, RustCrate *out)
     if (has_whitespace(path)) {
         diag("crate root path contains whitespace: '%s'", path);
         diag("whitespace paths are unrepresentable in depfiles; rename "
-             "the file (thorn has_whitespace invariant)");
+             "the file");
         return SCAN_INVALID;
     }
 
@@ -331,7 +318,7 @@ int scan_crate(const char *path, RustCrate *out)
 
     char *clean = malloc(len + 1);
     char *nocomment = malloc(len + 1);
-    if (!clean || !nocomment) {
+    if (clean == NULL || nocomment == NULL) {
         diag("out of memory normalizing '%s'", path);
         free(clean);
         free(nocomment);
@@ -347,10 +334,6 @@ int scan_crate(const char *path, RustCrate *out)
     int has_global_allocator = find_attr(clean, "global_allocator", 0);
     int uses_alloc = strstr(clean, "extern crate alloc") != NULL;
 
-    /* no_std defaults (docs/SCOPING.md section 3.2 flag table):
-       abort + opt-level=z unless the CLI already set them explicitly.
-       panic_abort -1 = unspecified; an explicit --panic unwind (0) is
-       never overridden. */
     if (out->no_std) {
         if (out->panic_abort < 0)
             out->panic_abort = 1;
@@ -360,7 +343,6 @@ int scan_crate(const char *path, RustCrate *out)
         out->panic_abort = 0;
     }
 
-    /* crate name: CLI flag wins; #![crate_name = "..."] fills the gap. */
     char attr_name[128];
     if (find_attr_value(nocomment, "crate_name", attr_name,
                         sizeof(attr_name))) {
@@ -376,16 +358,16 @@ int scan_crate(const char *path, RustCrate *out)
     free(nocomment);
 
     if (out->no_std && !out->has_panic_handler) {
-        diag("%s declares #![no_std] but no in-tree #[panic_handler] was "
-             "found", path);
-        diag("Phase 0 has no Cargo to supply one; add a handler to the "
+        diag("%s declares #![no_std] but no in-tree #[panic_handler] "
+             "was found", path);
+        diag("there is no Cargo to supply one; add a handler to the "
              "crate root (see tests/fixtures/probe/lib.rs)");
         return SCAN_INVALID;
     }
 
     if (uses_alloc && !has_global_allocator)
-        diag("warning: %s uses `extern crate alloc` without an in-tree "
-             "#[global_allocator]; linking will fail without one", path);
+        diag("warning: %s uses `extern crate alloc` without an "
+             "in-tree #[global_allocator]", path);
 
     if (out->name[0] == '\0') {
         diag("no crate name: pass --name or add "
