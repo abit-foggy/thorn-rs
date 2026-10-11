@@ -153,10 +153,16 @@ blank_noncode(const char *src, size_t len, char *out)
             continue;
         }
         if (c == '#' && line_start) {
-            while (i < len) {
-                out[o++] = (src[i] == '\n') ? '\n' : ' ';
-                if (src[i] == '\n')
-                    break;
+            /* Blank the preprocessor line, emitting its newline exactly
+               once: the inner loop must consume the '\n' it writes, or
+               the default branch emits it again and o outruns i by one
+               byte per line, overflowing out on the final write. */
+            while (i < len && src[i] != '\n') {
+                out[o++] = ' ';
+                i++;
+            }
+            if (i < len) {
+                out[o++] = '\n';
                 i++;
             }
             line_start = 1;
