@@ -67,7 +67,7 @@ c_abit_foggy_rust_crate(PithValue *name, PithValue *root,
     /* The command writes the archive relative to the build CWD; the
        graph edge carries the bare name (thorn prefixes the out-dir).
        The audit edge consumes the out-dir-prefixed path - the same
-       string the spec's add_source uses (SCOPING.md section 3.3). */
+       string the spec's add_source uses (the path-identity rule). */
     const char *od = getenv("THORN_OUT_DIR");
     if (od == NULL || *od == '\0' || strcmp(od, ".") == 0)
         od = "";

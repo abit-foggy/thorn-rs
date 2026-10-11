@@ -634,7 +634,7 @@ cmd_build(int argc, char **argv)
         for (size_t k = 0; k < i; k++) {
             if (strcmp(crates[k].name, c->name) == 0) {
                 diag("duplicate crate name '%s' (one archive per name; "
-                     "see docs/SCOPING.md section 5.1)", c->name);
+                     "see the one-crate-per-link rule)", c->name);
                 rc = THORN_RS_EXIT_SCAN;
                 goto out_free;
             }
