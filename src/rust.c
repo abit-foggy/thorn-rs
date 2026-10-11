@@ -88,7 +88,7 @@ void rust_crate_init(RustCrate *c)
     c->kind = RUST_CRATE_STATICLIB;
     snprintf(c->edition, sizeof(c->edition), "2021");
     c->opt_level = RUST_OPT_UNSET;
-    c->panic_abort = 0;
+    c->panic_abort = -1;   /* unspecified: scanner applies no_std default */
     c->debuginfo = -1;
 }
 

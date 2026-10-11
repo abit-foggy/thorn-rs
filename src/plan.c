@@ -178,7 +178,7 @@ static int valid_extra_flag(const char *s)
 int plan_rustflags(const RustCrate *c, char *buf, size_t n)
 {
     buf[0] = '\0';
-    if (c->panic_abort && seg(buf, n, " -C panic=abort"))
+    if (c->panic_abort == 1 && seg(buf, n, " -C panic=abort"))
         return 1;
     if (c->opt_level != RUST_OPT_UNSET &&
         seg(buf, n, " -C opt-level=%c", (char)c->opt_level))

@@ -306,6 +306,16 @@ int scan_crate(const char *path, RustCrate *out)
     if (!path || !out)
         return SCAN_INVALID;
 
+    /* Local copy: `out->root` may alias `path` (the CLI stores the
+       positional argument there); never self-assign through snprintf. */
+    char pathbuf[1024];
+    if (strlen(path) >= sizeof(pathbuf)) {
+        diag("crate root path exceeds %zu bytes", sizeof(pathbuf) - 1);
+        return SCAN_INVALID;
+    }
+    snprintf(pathbuf, sizeof(pathbuf), "%s", path);
+    path = pathbuf;
+
     if (has_whitespace(path)) {
         diag("crate root path contains whitespace: '%s'", path);
         diag("whitespace paths are unrepresentable in depfiles; rename "
@@ -338,12 +348,16 @@ int scan_crate(const char *path, RustCrate *out)
     int uses_alloc = strstr(clean, "extern crate alloc") != NULL;
 
     /* no_std defaults (docs/SCOPING.md section 3.2 flag table):
-       abort + opt-level=z unless the CLI already set them explicitly. */
+       abort + opt-level=z unless the CLI already set them explicitly.
+       panic_abort -1 = unspecified; an explicit --panic unwind (0) is
+       never overridden. */
     if (out->no_std) {
-        if (!out->panic_abort)
+        if (out->panic_abort < 0)
             out->panic_abort = 1;
         if (out->opt_level == RUST_OPT_UNSET)
             out->opt_level = 'z';
+    } else if (out->panic_abort < 0) {
+        out->panic_abort = 0;
     }
 
     /* crate name: CLI flag wins; #![crate_name = "..."] fills the gap. */

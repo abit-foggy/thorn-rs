@@ -44,7 +44,7 @@ typedef struct RustCrate {
     char edition[16];      /* "2015"|"2018"|"2021"|"2024"               */
     char target[128];      /* --target triple; "" = host                */
     int  opt_level;        /* RUST_OPT_UNSET or '0'..'3'/'s'/'z'        */
-    int  panic_abort;      /* 1 => -C panic=abort                       */
+    int  panic_abort;      /* -1 unspecified; 1 => -C panic=abort       */
     int  debuginfo;        /* 0..2, -1 = omit                           */
     int  no_std;           /* scanner: #![no_std] seen                  */
     int  has_panic_handler;/* scanner: #[panic_handler] seen            */
