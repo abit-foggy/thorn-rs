@@ -32,6 +32,31 @@ out/libprobe.a: src/lib.rs
 The resulting `lib<name>.a` is a plain C-ABI static archive — add it to any
 C link line, including thorn-generated `build.ninja` / `Makefile` backends.
 
+## As a thorn plugin
+
+`make dist/thorn-rs.tpkg` packages the brain as a thorn plugin (a tar of
+`plugin.o` + manifest). A project declares it and calls it from the
+unified spec — one graph, one command:
+
+```toml
+# pith.toml
+[deps]
+thorn-rs = "../thorn-rs/dist/thorn-rs.tpkg"
+```
+
+```pith
+# build.thorn
+rust.crate("safe", "rust/safe/src/lib.rs", "include/safe.h")
+engine.add_target("app", engine.exe)
+engine.add_source("app", "src/main.c")
+engine.add_source("app", "out/libsafe.a")
+engine.add_order_dep("app", "out/.thorn-rs/safe.verified")
+```
+
+```sh
+thorn pkg sync && thorn --out-dir out && ninja -f out/build.ninja
+```
+
 ## C-ABI verification
 
 The classic no_std failure is a silent ABI mismatch: a forgotten
