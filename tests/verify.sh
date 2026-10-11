@@ -93,7 +93,8 @@ step "emit: make fragment"
 bin/thorn-rs emit "$FIXTURE" --format make --out out-make/build-rs.mk \
     >/dev/null 2>&1 && ok "emit make succeeds"
 grep -q "RUSTC ?= rustc" out-make/build-rs.mk \
-    && grep -q -- "-include out-make/libprobe.a.d" out-make/build-rs.mk \
+    && grep -qF -- '-include $(RS_ROOT)/out-make/libprobe.a.d' \
+        out-make/build-rs.mk \
     && ok "make fragment carries RUSTC ?= and depfile inclusion"
 bin/thorn-rs emit "$FIXTURE" --format make --out out-make/build-rs.mk \
     >/dev/null 2>&1
@@ -214,6 +215,54 @@ if [ -n "$NINJA_BIN" ]; then
         && [ -f .thorn-rs/probe.verified ] \
         && ok "ninja runs the audit and stamps the result"
 fi
+
+# ------------------------------------------------------------------
+step "build: thorn-parity front-end"
+DEFDIR="$SCRATCH/defbuild"
+mkdir -p "$DEFDIR/src"
+cp tests/fixtures/probe/lib.rs "$DEFDIR/src/lib.rs"
+(cd "$DEFDIR" && thorn-rs build >/dev/null 2>&1) \
+    && [ -f "$DEFDIR/build-rs.ninja" ] \
+    && ok "bare build defaults to src/lib.rs in the CWD"
+(cd "$DEFDIR" && ninja -f build-rs.ninja >/dev/null 2>&1) \
+    && [ -f "$DEFDIR/libprobe.a" ] \
+    && ok "the default fragment builds in place"
+
+rm -rf out/rs
+bin/thorn-rs build -f tests/fixtures/probe/lib.rs --out-dir out/rs \
+    --engine both >/dev/null 2>&1
+[ -f out/rs/build-rs.ninja ] && [ -f out/rs/Makefile ] \
+    && ok "--out-dir --engine both writes both backends"
+ninja -f out/rs/build-rs.ninja >/dev/null 2>&1 \
+    && [ -f out/rs/libprobe.a ] \
+    && ok "ninja -f out/rs/build-rs.ninja compiles the archive"
+NINJA_SHA=$(sha256sum out/rs/libprobe.a | cut -d' ' -f1)
+rm -f out/rs/libprobe.a out/rs/libprobe.a.d
+make -C out/rs >/dev/null 2>&1 && [ -f out/rs/libprobe.a ] \
+    && ok "make -C out/rs compiles the archive independently"
+MAKE_SHA=$(sha256sum out/rs/libprobe.a | cut -d' ' -f1)
+if [ -n "$NINJA_SHA" ] && [ "$NINJA_SHA" = "$MAKE_SHA" ]; then
+    ok "ninja and make archives are bit-for-bit identical"
+else
+    bad "backend archives diverge"
+fi
+
+bin/thorn-rs build tests/fixtures/probe/lib.rs \
+    tests/fixtures/probe2/lib.rs --out-dir out/multi >/dev/null 2>&1 \
+    && ok "multi-crate build emits one fragment"
+grep -q "rule rustc_probe" out/multi/build-rs.ninja \
+    && grep -q "rule rustc_probe2" out/multi/build-rs.ninja \
+    && grep -q "build all: phony" out/multi/build-rs.ninja \
+    && ok "multi-crate fragments namespace rules and aggregate all"
+ninja -f out/multi/build-rs.ninja >/dev/null 2>&1 \
+    && [ -f out/multi/libprobe.a ] && [ -f out/multi/libprobe2.a ] \
+    && ok "multi-crate build compiles both archives"
+bin/thorn-rs build tests/fixtures/probe/lib.rs \
+    tests/fixtures/probe/lib.rs --out-dir "$SCRATCH/dup" 2>/dev/null
+[ $? -eq 1 ] && ok "duplicate crate names are refused"
+
+(cd "$SCRATCH" && thorn-rs build >/dev/null 2>&1)
+[ $? -eq 2 ] && ok "missing src/lib.rs fails with the I/O class"
 
 # ------------------------------------------------------------------
 printf '\nthorn-rs acceptance: %d passed, %d failed\n' "$PASS" "$FAIL"
