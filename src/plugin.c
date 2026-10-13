@@ -110,7 +110,7 @@ c_abit_foggy_rust_crate(PithValue *name, PithValue *root,
 
     if (c.header[0]) {
         StrList want = {0};
-        char vcmd[1024];
+        char vcmd[4096];
         if (verify_expected(c.header, &c.capi_syms, &want) != 0 ||
             verify_edge_command(ar_cwd, NULL, &want, vcmd,
                                 sizeof(vcmd)) != 0) {
@@ -120,7 +120,7 @@ c_abit_foggy_rust_crate(PithValue *name, PithValue *root,
         }
         strlist_free(&want);
 
-        char stamp[1024];
+        char stamp[4608];
         int sw = (od[0] == '\0')
             ? snprintf(stamp, sizeof(stamp),
                        "mkdir -p .thorn-rs && %s && touch "

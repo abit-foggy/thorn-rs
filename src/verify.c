@@ -323,8 +323,16 @@ verify_expected(const char *header, const StrList *extra, StrList *out)
 {
     if (header && collect_header_syms(header, out) != 0)
         return THORN_RS_EXIT_IO;
-    for (size_t i = 0; i < extra->count; i++)
-        strlist_push(out, extra->items[i]);
+    for (size_t i = 0; i < extra->count; i++) {
+        int dup = 0;
+        for (size_t k = 0; k < out->count; k++)
+            if (strcmp(out->items[k], extra->items[i]) == 0) {
+                dup = 1;
+                break;
+            }
+        if (!dup)
+            strlist_push(out, extra->items[i]);
+    }
     return 0;
 }
 
