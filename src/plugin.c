@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include <pith.h>
 
@@ -117,6 +118,34 @@ c_abit_foggy_rust_crate(PithValue *name, PithValue *root,
             strlist_free(&want);
             diag("cannot plan the audit edge for crate '%s'", c.name);
             return 0;
+        }
+        /* plan-time sidecar: the audit command cats these symbols so the
+           command string never grows with the abi */
+        {
+            char syms_path[1200];
+            int pw = snprintf(syms_path, sizeof(syms_path), "%s.syms", ar_cwd);
+            if (pw < 0 || (size_t)pw >= sizeof(syms_path)) {
+                strlist_free(&want);
+                diag("symbol sidecar path for crate '%s' too long", c.name);
+                return 0;
+            }
+            /* ensure the out-dir exists before the sidecar write */
+            for (char *p = syms_path + 1; *p; p++) {
+                if (*p == '/') {
+                    *p = 0;
+                    mkdir(syms_path, 0755);
+                    *p = '/';
+                }
+            }
+            FILE *sf = fopen(syms_path, "w");
+            if (!sf) {
+                strlist_free(&want);
+                diag("cannot write symbol sidecar '%s'", syms_path);
+                return 0;
+            }
+            for (size_t i = 0; i < want.count; i++)
+                fprintf(sf, "%s\n", want.items[i]);
+            fclose(sf);
         }
         strlist_free(&want);
 

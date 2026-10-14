@@ -351,24 +351,17 @@ verify_edge_command(const char *archive, const char *header,
         diag("verify edge requested with no expected symbols");
         return 1;
     }
-    if (snprintf(buf, n, "for s in") >= (int)n) {
+    /* the symbol list rides in a sidecar file so the command itself stays
+       short regardless of how many symbols the abi grows to */
+    if (snprintf(buf, n, "for s in $$(cat %s.syms)"
+                 "; do nm -g --defined-only %s 2>/dev/null"
+                 " | grep -qw \"$$s\" || exit 1; done",
+                 archive, archive) >= (int)n) {
         strlist_free(&want);
         return 1;
     }
-    for (size_t i = 0; i < want.count; i++) {
-        size_t len = strlen(buf);
-        int w = snprintf(buf + len, n - len, " %s", want.items[i]);
-        if (w < 0 || (size_t)w >= n - len) {
-            strlist_free(&want);
-            return 1;
-        }
-    }
-    size_t len = strlen(buf);
-    int w = snprintf(buf + len, n - len,
-                     "; do nm -g --defined-only %s 2>/dev/null"
-                     " | grep -qw \"$$s\" || exit 1; done", archive);
     strlist_free(&want);
-    return (w < 0 || (size_t)w >= n - len) ? 1 : 0;
+    return 0;
 }
 
 int
