@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "include/scan.h"
 
@@ -384,6 +385,100 @@ collect_no_mangle_fns(const char *s, StrList *out)
     }
 }
 
+/* dirname helper for resolving sibling module files from the crate root. */
+static int
+crate_dir_name(const char *p, char *buf, size_t n)
+{
+    const char *slash = strrchr(p, '/');
+    if (!slash) {
+        snprintf(buf, n, ".");
+        return 0;
+    }
+    size_t d = (size_t)(slash - p);
+    if (d == 0)
+        d = 1;
+    if (d >= n)
+        d = n - 1;
+    memcpy(buf, p, d);
+    buf[d] = '\0';
+    return 0;
+}
+
+/* Scan a sibling module file for panic_handler / no_mangle / export_name.
+   Does not touch no_std or crate_name (those come from the root).  Tracks
+   total bytes scanned across modules to enforce SCAN_MAX_MODULE_BYTES.
+   Returns SCAN_OK / SCAN_IO / SCAN_INVALID. */
+static int
+scan_file_attrs(const char *path, RustCrate *out, size_t *module_bytes)
+{
+    char *src = NULL;
+    size_t len = 0;
+    int rc = read_file(path, &src, &len);
+    if (rc != SCAN_OK)
+        return rc;
+    if (*module_bytes + len > SCAN_MAX_MODULE_BYTES) {
+        free(src);
+        diag("module bytes exceed the %zu byte scan cap",
+             (unsigned long)SCAN_MAX_MODULE_BYTES);
+        return SCAN_INVALID;
+    }
+    *module_bytes += len;
+
+    char *clean = malloc(len + 1);
+    char *nocomment = malloc(len + 1);
+    if (!clean || !nocomment) {
+        free(clean);
+        free(nocomment);
+        free(src);
+        diag("out of memory normalizing '%s'", path);
+        return SCAN_IO;
+    }
+    normalize(src, len, clean, 0);
+    normalize(src, len, nocomment, 1);
+    free(src);
+
+    if (find_attr(clean, "panic_handler", 0))
+        out->has_panic_handler = 1;
+    collect_no_mangle_fns(clean, &out->capi_syms);
+    collect_export_names(nocomment, &out->capi_syms);
+
+    free(clean);
+    free(nocomment);
+    return SCAN_OK;
+}
+
+/* Collect `mod name;` declarations from normalized source text.
+   Fills names[] with up to max entries, returns count.  Whitespace
+   tolerant; only top-level declarations are reported. */
+static int
+find_mod_decls(const char *s, char names[][128], int max)
+{
+    int count = 0;
+    for (const char *p = strstr(s, "mod "); p && count < max;
+         p = strstr(p + 4, "mod ")) {
+        p += 4;
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+            p++;
+        if (!is_ident_start(*p))
+            continue;
+        const char *start = p;
+        while (is_ident(*p))
+            p++;
+        size_t len = (size_t)(p - start);
+        if (len >= 128)
+            len = 127;
+        memcpy(names[count], start, len);
+        names[count][len] = '\0';
+        count++;
+        /* skip to after ';' or '{' or end of line */
+        while (*p && *p != ';' && *p != '{' && *p != '\n')
+            p++;
+        if (*p)
+            p++;
+    }
+    return count;
+}
+
 int
 scan_crate(const char *path, RustCrate *out)
 {
@@ -452,6 +547,33 @@ scan_crate(const char *path, RustCrate *out)
 
     collect_no_mangle_fns(clean, &out->capi_syms);
     collect_export_names(nocomment, &out->capi_syms);
+
+    /* Scan sibling module files for panic_handler / no_mangle / export_name.
+       A crate root like `mod math;` pulls in math.rs or math/mod.rs.
+       Only top-level `mod` declarations are followed; deeper nesting is
+       the module's own responsibility. */
+    if (out->no_std) {
+        char dir[1024];
+        crate_dir_name(path, dir, sizeof(dir));
+        char mods[SCAN_MAX_MODULES][128];
+        int nmods = find_mod_decls(clean, mods, SCAN_MAX_MODULES);
+        size_t module_bytes = 0;
+        for (int i = 0; i < nmods; i++) {
+            char cand1[1024], cand2[1024];
+            snprintf(cand1, sizeof(cand1), "%s/%s.rs", dir, mods[i]);
+            snprintf(cand2, sizeof(cand2), "%s/%s/mod.rs", dir, mods[i]);
+            int rc = SCAN_OK;
+            if (access(cand1, F_OK) == 0)
+                rc = scan_file_attrs(cand1, out, &module_bytes);
+            else if (access(cand2, F_OK) == 0)
+                rc = scan_file_attrs(cand2, out, &module_bytes);
+            if (rc != SCAN_OK) {
+                free(clean);
+                free(nocomment);
+                return rc;
+            }
+        }
+    }
 
     free(clean);
     free(nocomment);

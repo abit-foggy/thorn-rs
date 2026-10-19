@@ -17,7 +17,9 @@ enum {
     SCAN_IO      = 2   /* cannot read      */
 };
 
-#define SCAN_MAX_BYTES (1u << 20)
+#define SCAN_MAX_BYTES (1u << 20)   /* 1 MiB cap on crate roots        */
+#define SCAN_MAX_MODULES 64         /* max sibling modules to scan     */
+#define SCAN_MAX_MODULE_BYTES (4u << 20) /* 4 MiB cap on module bytes   */
 
 /*
  * Inspect a crate root and fill `out`.  Fills the gaps the CLI left
