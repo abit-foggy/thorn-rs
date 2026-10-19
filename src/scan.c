@@ -553,13 +553,13 @@ scan_crate(const char *path, RustCrate *out)
        Only top-level `mod` declarations are followed; deeper nesting is
        the module's own responsibility. */
     if (out->no_std) {
-        char dir[1024];
+        char dir[8192];
         crate_dir_name(path, dir, sizeof(dir));
         char mods[SCAN_MAX_MODULES][128];
         int nmods = find_mod_decls(clean, mods, SCAN_MAX_MODULES);
         size_t module_bytes = 0;
         for (int i = 0; i < nmods; i++) {
-            char cand1[1024], cand2[1024];
+            char cand1[65536], cand2[65536];
             snprintf(cand1, sizeof(cand1), "%s/%s.rs", dir, mods[i]);
             snprintf(cand2, sizeof(cand2), "%s/%s/mod.rs", dir, mods[i]);
             int rc = SCAN_OK;
