@@ -15,7 +15,7 @@
 
 #include <stddef.h>
 
-#define THORN_RS_VERSION "0.1.0"
+#define THORN_RS_VERSION "0.2.0"
 
 /* Exit codes. */
 enum {
